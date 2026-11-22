@@ -89,10 +89,17 @@ void superSaw()
         const double hz = f0 * (1.0 + expected[i]);
         near (peakHz (x, hz - 4, hz + 4, 0.5), hz, 1.0, "supersaw offset " + std::to_string (i));
     }
-    near (mapping::superCentre (0.0), 0.99785, 1e-9, "centre gain at mix 0");
-    near (mapping::superSide (1.0), -0.73764 + 1.2841 + 0.044372, 1e-9, "side gain at mix 1");
-    check (mapping::superDetune (1.0) > 0.98 && mapping::superDetune (1.0) < 1.02, "detune law end");
-    check (mapping::superDetune (0.5) < 0.15, "detune law is flat through its first half");
+    // Szabo's measured tables (thesis Tables 2 and 3), not his fitted curves.
+    near (mapping::superCentre (0.0), 1.0, 1e-9, "centre gain at mix 0");
+    near (mapping::superSide (0.0), 0.03836, 1e-9, "side gain at mix 0");
+    near (mapping::superCentre (95.0 / 127.0), 0.585, 1e-9, "centre gain at mix 95");
+    near (mapping::superSide (1.0), 0.59, 1e-9, "side gain at mix 127");
+    near (mapping::superDetune (63.0 / 127.0), 0.0967273, 1e-9, "detune at 63");
+    near (mapping::superDetune (1.0), 1.0, 1e-9, "detune at 127");
+    bool rising = true;
+    for (int v = 1; v < 128; ++v)
+        rising = rising && mapping::superDetune (v / 127.0) > mapping::superDetune ((v - 1) / 127.0);
+    check (rising, "detune never turns back");
 
     // Pitch-tracked high-pass: what aliases below f0 is well under the fundamental.
     SuperSaw high;

@@ -18,25 +18,40 @@ inline constexpr std::array<double, 7> superOffsets {
     -0.11002313, -0.06288439, -0.01952356, 0.0, 0.01991221, 0.06216538, 0.10745242
 };
 
-// [measured] Szabo's 11th-order fit of the DETUNE law.
-inline double superDetune (double knob) noexcept
+namespace detail
 {
-    const double x = std::clamp (knob, 0.0, 1.0);
-    // [measured] The fit's 0.00301 intercept gives the wrong steps at knob 0:
-    // a recorded JP-8080 allows 0.00267 to 0.00272 there.
-    if (x == 0.0)
-        return 0.0027;
-    return ((((((((((10028.7312891634 * x - 50818.8652045924) * x
-                    + 111363.4808729368) * x - 138150.6761080548) * x
-                  + 106649.6679158292) * x - 53046.9642751875) * x
-                + 17019.9518580080) * x - 3425.0836591318) * x
-              + 404.2703938388) * x - 24.1878824391) * x
-            + 0.6717417634) * x + 0.0030115596;
+// Linear interpolation through a measurement every eighth step of a knob.
+template <std::size_t N>
+inline double table (const std::array<double, N>& points, double knob) noexcept
+{
+    const double at = std::clamp (knob, 0.0, 1.0) * 127.0;
+    const std::size_t i = std::min<std::size_t> (static_cast<std::size_t> (at / 8.0), N - 2);
+    const double lo = 8.0 * static_cast<double> (i), hi = i + 2 == N ? 127.0 : lo + 8.0;
+    const double low = lo == 0.0 ? 0.0 : lo - 1.0, high = i + 2 == N ? 127.0 : hi - 1.0;
+    return points[i] + (points[i + 1] - points[i]) * (at - low) / (high - low);
 }
+} // namespace detail
 
-// [measured] Szabo's MIX laws.
-inline double superCentre (double mix) noexcept { return -0.55366 * mix + 0.99785; }
-inline double superSide (double mix) noexcept { return (-0.73764 * mix + 1.2841) * mix + 0.044372; }
+// [measured] A. Szabo, "How to Emulate the Super Saw", KTH 2010, Table 2:
+// DETUNE at MIDI 0, 7, 15 ... 119, 127, from a JP-8000 and a JP-8080.
+// Interpolated, not his 11th-order fit, which misses the table by up to 4%
+// and turns back near the middle. His 0 at MIDI 0 is his zero; a JP-8080
+// recording gives 0.0027 there (Docs/research/hardware-ab-2026-11-22.md).
+inline constexpr std::array<double, 17> detuneTable {
+    0.0027, 0.00967268, 0.0220363, 0.0339636, 0.0467636, 0.0591273, 0.0714909, 0.0838545,
+    0.0967273, 0.121527, 0.147127, 0.193455, 0.243418, 0.2933815, 0.343345, 0.3928, 1.0
+};
+inline double superDetune (double knob) noexcept { return detail::table (detuneTable, knob); }
+
+// [measured] Szabo Table 3: centre and side levels against MIX, same points.
+inline constexpr std::array<double, 17> centreTable {
+    1.0, 0.965, 0.93, 0.901, 0.86, 0.83, 0.795, 0.76, 0.72, 0.69, 0.65, 0.62, 0.585, 0.55, 0.51, 0.48, 0.445
+};
+inline constexpr std::array<double, 17> sideTable {
+    0.03836, 0.12, 0.19, 0.25, 0.31, 0.37, 0.42, 0.46, 0.5, 0.53, 0.56, 0.58, 0.59, 0.6, 0.605, 0.6, 0.59
+};
+inline double superCentre (double mix) noexcept { return detail::table (centreTable, mix); }
+inline double superSide (double mix) noexcept { return detail::table (sideTable, mix); }
 
 // [measured] JP-8080 recording, Docs/research/hardware-ab-2026-11-22.md.
 inline constexpr double superHighPassRatio = 0.904;

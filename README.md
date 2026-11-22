@@ -6,7 +6,7 @@ once its sound is approved. "Hypra" is a working name. It is an independent
 original implementation, not affiliated with or licensed by Roland, and holds
 no firmware, ROM data, samples, captured audio or factory patch data.
 
-**Status: 0.1.2, for listening.** The engine is complete enough to judge the
+**Status: 0.1.3, for listening.** The engine is complete enough to judge the
 sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
 mode or motion control. The supersaw, the saw's round end, the 12 dB filter,
 the tone control and the feedback howl have been checked against recordings
@@ -62,6 +62,7 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.1.3 | Detune and Mix follow Szabo's measured tables instead of his fitted curves: the sides are 14 % quieter at Mix 0. |
 | 0.1.2 | The saw's round end and the feedback howl's tuning follow factory-patch recordings. |
 | 0.1.1 | The supersaw follows a recorded JP-8080: a four-pole tracked high-pass, which restores its fundamental, and the recorded drift at Detune 0. |
 | 0.1.0 | First proof of concept. |

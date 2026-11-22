@@ -12,10 +12,15 @@
 | OM-8080 | [Roland JP-8080 Owner's Manual](https://archive.org/details/synthmanual-roland-jp-8080-owners-manual) | unison, LFO 2 |
 | Szabo | [A. Szabo, "How to Emulate the Super Saw", KTH 2010](https://www.adamszabo.com/internet/adam_szabo_how_to_emulate_the_super_saw.pdf) | supersaw offsets, detune law, mix laws, high-pass, phases |
 
-**The thesis was not read for this work.** Its numbers are taken from
-Septum's engine, where they were transcribed earlier, and its findings on
-phases, the high-pass and aliasing from secondary accounts of it. Everything
-marked Szabo below is therefore second-hand until checked against the PDF.
+Read on 2026-11-22 (PDF SHA-256
+`a354c6764a189e20e1c771a253fe4be50281b6f292bc114d307cdf9a1d9f07e2`, from the
+owner's link). It was recorded from a JP-8000 and a JP-8080 at 44.1 kHz. The
+offsets (Table 1) match those we had. Detune and Mix now use his measured
+Tables 2 and 3. His fitted curves miss the detune table by up to 4% and turn
+back near the middle, and they put the side level at Mix 0 16% above his own
+measurement (0.0444 against 0.0384; the JP-8080 recording here gave 0.041).
+His high-pass is "at the first harmonic", with no order given. Phases random
+at each note, no band-limiting: both confirmed in the text.
 
 **Deliberately not used:** the 2025-26 emulator built on extracted JP-8000
 firmware, its source, and write-ups reproducing its code or tables. Search
@@ -52,7 +57,7 @@ at 34 and 73 kHz.
 
 | Mechanism | Evidence |
 | --- | --- |
-| Seven offsets, the 11th-order detune law, both mix laws | Szabo |
+| Seven offsets; Detune and Mix tables, interpolated | Szabo, Tables 1-3 |
 | Pitch-tracked high-pass on the saw stack | Szabo |
 | Unrelated phases at each note | Szabo |
 | No band-limiting | Szabo |
