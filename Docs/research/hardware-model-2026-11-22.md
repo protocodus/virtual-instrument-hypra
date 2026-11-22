@@ -10,16 +10,17 @@
 | OM-8080 | [Roland JP-8080 Owner's Manual](https://archive.org/details/synthmanual-roland-jp-8080-owners-manual) | unison, LFO 2 |
 | Szabo | [A. Szabo, "How to Emulate the Super Saw", KTH 2010](https://www.adamszabo.com/internet/adam_szabo_how_to_emulate_the_super_saw.pdf) | supersaw offsets, detune law, mix laws, high-pass, phases |
 
-Szabo's numbers are taken from Septum's engine, where they were transcribed
-earlier. The PDF was not re-read for this work, so they have not been checked
-against the thesis again.
+**The thesis was not read for this work.** Its numbers are taken from
+Septum's engine, where they were transcribed earlier, and its findings on
+phases, the high-pass and aliasing from secondary accounts of it. Everything
+marked Szabo below is therefore second-hand until checked against the PDF.
 
 **Deliberately not used:** the 2025-26 emulator built on extracted JP-8000
 firmware, its source, and write-ups reproducing its code or tables. Search
-summaries of that work were seen (seven naive saws into a high-pass at
-88.2 kHz), and say nothing that the sources above do not.
+summaries of that work were seen while researching (seven naive saws into a
+high-pass at 88.2 kHz). No value or code comes from it.
 
-The schematics were read from 600 dpi scans and the values copied by eye.
+The schematic values were copied by eye from the archive.org page scans.
 
 ## Settled by Roland's documents
 
@@ -27,7 +28,7 @@ The schematics were read from 600 dpi scans and the values copied by eye.
 | --- | --- |
 | 88.2 kHz DSP and DAC word rate (67.7376 MHz / 768) | SN-8080 pp.13, 19; same parts in SN-8000 |
 | Four TC170C140 DSPs, uPD63200 DAC strapped to 18 bit | SN-8000 pp.4-5, 23 |
-| Output network, every value | SN-8000 pp.23, 27, 30; SN-8080 pp.19, 21, 27 |
+| Output network's component values | SN-8000 pp.23, 27, 30; SN-8080 pp.19, 21, 27 |
 | Eight voices, two parts, last-note priority | OM-8000 pp.48, 129 |
 | Seven OSC 1 waves, three OSC 2 waves, what both controls do | OM-8000 pp.55-57 |
 | Feedback oscillator is monophonic | OM-8000 p.56 |

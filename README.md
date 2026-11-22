@@ -24,12 +24,13 @@ voices and effects, and only the stage from the DAC to the jacks is analogue.
 So the model has two halves.
 
 - **The DSP, as behaviour.** 88.2 kHz inside whatever the host rate, naive
-  oscillators that alias, 24-bit phase, 7-bit controls, sample-accurate but
-  uncorrected sync, hard clipping at full scale, an 18-bit DAC. There is no
+  oscillators that alias, 7-bit controls, an 18-bit DAC and, as inferences,
+  24-bit phase, uncorrected sync and hard clipping at full scale. There is no
   invented analogue drift, because the hardware has none.
-- **The output stage, as a circuit.** Every resistor and capacitor between
-  the DAC and the line jack, solved from the 1997 service notes and
-  discretised at 705.6 kHz.
+- **The output stage, as a circuit.** The network from the DAC to the line
+  jack, solved from the 1997 service notes' component values and discretised
+  at 705.6 kHz. Left out: the volume pot's loading, mute transistors,
+  ferrites, a 100 ohm / 100 pF RF filter, op-amp limits and noise.
 
 The signal path is `OSC 1 + OSC 2 (sync, ring, X-mod) -> filter -> amp ->
 tone control -> delay -> chorus -> pan -> DAC -> output circuit`, for two

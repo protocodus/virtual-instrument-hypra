@@ -1,4 +1,5 @@
-// The whole analogue path from DAC to line jack, solved from the schematic.
+// The analogue path from DAC to line jack, solved from the schematic. Left
+// out: pot loading, mute transistors, ferrites, the 100R/100p RF filter.
 //
 // Roland JP-8000 Service Notes, January 1997 (70559865):
 //   https://archive.org/details/roland_JP-8000_SERVICE_NOTES
