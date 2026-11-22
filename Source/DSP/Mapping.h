@@ -22,6 +22,10 @@ inline constexpr std::array<double, 7> superOffsets {
 inline double superDetune (double knob) noexcept
 {
     const double x = std::clamp (knob, 0.0, 1.0);
+    // [measured] The fit's 0.00301 intercept gives the wrong steps at knob 0:
+    // a recorded JP-8080 allows 0.00267 to 0.00272 there.
+    if (x == 0.0)
+        return 0.0027;
     return ((((((((((10028.7312891634 * x - 50818.8652045924) * x
                     + 111363.4808729368) * x - 138150.6761080548) * x
                   + 106649.6679158292) * x - 53046.9642751875) * x
@@ -33,6 +37,10 @@ inline double superDetune (double knob) noexcept
 // [measured] Szabo's MIX laws.
 inline double superCentre (double mix) noexcept { return -0.55366 * mix + 0.99785; }
 inline double superSide (double mix) noexcept { return (-0.73764 * mix + 1.2841) * mix + 0.044372; }
+
+// [measured] JP-8080 recording, Docs/research/hardware-ab-2026-11-22.md.
+inline constexpr double superHighPassRatio = 0.904;
+inline constexpr double superHighPassQ = 0.878;
 
 // [inferred] Ten octaves from 20 Hz.
 inline double cutoffOctaves (int value) noexcept { return 10.0 * unit (value); }

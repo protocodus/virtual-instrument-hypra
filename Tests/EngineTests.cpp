@@ -103,6 +103,38 @@ void superSaw()
     check (db (tone (x, 1800.0) / tone (x, 6000.0)) < -35.0, "alias below f0 is filtered");
 }
 
+void hardwareRecording()
+{
+    // FadedShadows' JP-8080 recording (Freesound 275434, CC0): SUPER SAW at
+    // DETUNE 0 and MIX 0, 98.874 Hz. Docs/research/hardware-ab-2026-11-22.md.
+    constexpr double f0 = 98.8741659278;
+    SuperSaw drift;
+    drift.configure (f0, 0.0, 0.0);
+    const int measured[] { -6, -4, -1, 0, 1, 3, 5 };
+    for (int i = 0; i < 7; ++i)
+        check (drift.stepsFromCentre (i) == measured[i], "measured drift step of saw " + std::to_string (i));
+
+    // Two identical 12 dB high-passes at 0.904 f0, Q 0.878: the fundamental
+    // sits 0.8 dB under the saw law. Averaged over starting phases.
+    double first = 0.0, tenth = 0.0;
+    for (std::uint32_t seed = 1; seed <= 16; ++seed)
+    {
+        Random random (seed * 7919u);
+        SuperSaw osc;
+        osc.trigger (random);
+        osc.configure (441.0, 0.0, 0.0);
+        std::vector<double> x (44100);
+        for (int i = 0; i < 2000; ++i)
+            osc.process();
+        for (auto& v : x)
+            v = osc.process();
+        const double a = tone (x, 441.0), b = 10.0 * tone (x, 4410.0);
+        first += a * a;
+        tenth += b * b;
+    }
+    near (10.0 * std::log10 (first / tenth), -0.83, 0.35, "measured high-pass at the fundamental");
+}
+
 void filter()
 {
     const auto gain = [] (FilterType type, bool steep, double hz)
@@ -389,7 +421,7 @@ void operator delete (void* p, std::size_t) noexcept { std::free (p); }
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
-        { "SuperSaw", superSaw }, { "Filter", filter }, { "Circuit", circuit },
+        { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)

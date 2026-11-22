@@ -18,7 +18,9 @@
 // So there are two nodes to choose from. As printed, the keyboard has a pole
 // at 1.06 kHz in the main output (-19.5 dB at 10 kHz), which cannot be the
 // whole story unless the DSP pre-emphasises or the marking is wrong. The
-// rack shows the same DSP, DAC and jack stage flat. Rack is the default.
+// rack shows the same DSP, DAC and jack stage flat, and recordings of both
+// instruments fit it and not the printed pole. Rack is the default
+// (Docs/research/hardware-ab-2026-11-22.md).
 //
 // Small signal, ideal op-amps, high-impedance load. Gains are normalised to
 // unity at 1 kHz on the rack node; no noise or op-amp clipping is invented.

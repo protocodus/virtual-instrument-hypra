@@ -4,6 +4,7 @@
 
 | Short | Source | Used for |
 | --- | --- | --- |
+| Recording | [JP-8080 note by FadedShadows, Freesound 275434, CC0](https://freesound.org/people/FadedShadows/sounds/275434/), measured in [the A/B](hardware-ab-2026-11-22.md) | supersaw high-pass, phase word, drift at Detune 0, output tilt |
 | SN-8000 | [Roland JP-8000 Service Notes, Jan 1997](https://archive.org/details/roland_JP-8000_SERVICE_NOTES) | parts, block diagram (p.15), DAC (p.23), panel B (p.27), jack board (p.30) |
 | SN-8080 | [Roland JP-8080 Service Notes, Jul 1998](https://archive.org/details/roland_JP-8080_SERVICE_NOTES) | clock (pp.13, 19), output (p.21), volume follower (p.27) |
 | OM-8000 | [Roland JP-8000 Owner's Manual, 1996](https://archive.org/details/synthmanual-roland-jp-8000-owners-manual) | parameters, waveform drawings, routing, effects |
@@ -55,12 +56,20 @@ at 34 and 73 kHz.
 | Unrelated phases at each note | Szabo |
 | No band-limiting | Szabo |
 
+## Measured here from a recording
+
+| Mechanism | Evidence |
+| --- | --- |
+| Supersaw high-pass: two identical 12 dB sections at 0.904 f0, Q 0.878 | Recording, amplitude and phase |
+| 24-bit phase at the documented 88.2 kHz | Recording: drift in whole steps of 88200 / 2^24 Hz |
+| Detune 0 amount 0.0027, floored products | Recording: steps -6, -4, -1, +1, +3, +5 |
+| No 1.06 kHz pole in the output | Recording; the JP-8000 file agrees |
+
 ## Inferred here
 
 | Mechanism | Choice | What would settle it |
 | --- | --- | --- |
-| Supersaw high-pass order | two poles, Butterworth | spectrum of a high note |
-| Phase word | 24 bit | pitch error of very low notes |
+| Supersaw high-pass tracking | the same ratio and Q on every key and detune | a second recorded note |
 | Triangle Mod | triangle times two, offset, wrapped at the rails | one cycle at three offsets |
 | Saw and triangle SHAPE | morphs matching OM-8000 p.56's drawings | one cycle per slider step |
 | Noise cutoff | key-following, 11 octaves, two poles | swept spectra |
@@ -83,12 +92,13 @@ SN-8000 p.27 marks C28 and C29 10000p across the 22k leg of a 47k/22k divider
 after the volume pot: a pole at 1.06 kHz in the main output. SN-8080 p.27 has
 the same DSP, DAC and jack filter with a plain follower. Either the JP-8000
 pre-emphasises digitally, or the marking is wrong, or the keyboard really is
-that much darker. Nothing read here decides it, so both are rendered for
-listening and the flat one is the default.
+that much darker. The recordings decided against the last: see
+[the A/B](hardware-ab-2026-11-22.md). The flat one is the default.
 
 ## What was and was not verified
 
 `Tests/EngineTests.cpp` checks that the code does what is written above: the
 offsets land within 1 Hz at 1 kHz, the slopes match, the discrete circuit
 follows the analytic one within 0.15 dB, the delay maxima are exact. That is
-self-consistency. It is not evidence of likeness to a real JP-8000.
+self-consistency. It is not evidence of likeness to a real JP-8000, except
+for the `HardwareRecording` suite, whose expectations come from a recording.

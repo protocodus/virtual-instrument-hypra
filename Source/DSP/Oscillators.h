@@ -15,7 +15,8 @@ namespace osc
 {
 inline constexpr double phaseScale = 1.0 / 4294967296.0;
 
-// [inferred] 24-bit phase, the TC170C140's word length, in the top bits.
+// [measured] 24-bit phase at 88.2 kHz, here in the top bits: the saws of a
+// recorded JP-8080 drift apart in exact multiples of 88200 / 2^24 Hz.
 inline std::uint32_t increment (double hz) noexcept
 {
     const double cycles = std::clamp (hz / kEngineRate, -0.499, 0.499);
@@ -105,6 +106,7 @@ public:
         for (auto& phase : phase_)
             phase = random.next();
         highPass_.reset();
+        highPass2_.reset();
     }
 
     void configure (double hz, double detune, double mix) noexcept
@@ -117,10 +119,19 @@ public:
             centre_ = mapping::superCentre (mix);
             side_ = mapping::superSide (mix);
         }
+        // [measured at DETUNE 0] each side saw is the centre's integer step
+        // plus a floored product, as an arithmetic shift leaves it.
+        const double centre = std::floor (std::clamp (hz / kEngineRate, 0.0, 0.499) * 16777216.0);
         for (std::size_t i = 0; i < step_.size(); ++i)
-            step_[i] = osc::increment (hz * (1.0 + mapping::superOffsets[i] * amount_));
-        // [measured] a high-pass at the fundamental. [inferred] two poles.
-        highPass_.configure (hz, 1.41421356);
+        {
+            const double steps = std::min (8388607.0, centre + std::floor (centre * mapping::superOffsets[i] * amount_));
+            step_[i] = static_cast<std::uint32_t> (static_cast<std::int32_t> (steps)) << 8;
+        }
+        // [measured] two identical 12 dB high-passes, from amplitude and
+        // phase of a recorded JP-8080. [inferred] that they track every key
+        // at the same ratio: the recording is one note.
+        highPass_.configure (hz * mapping::superHighPassRatio, 1.0 / mapping::superHighPassQ);
+        highPass2_.configure (hz * mapping::superHighPassRatio, 1.0 / mapping::superHighPassQ);
     }
 
     double process() noexcept
@@ -139,16 +150,23 @@ public:
             else
                 sides += saw;
         }
-        return 0.62 * highPass_.process (centre_ * centre + side_ * sides).high;
+        // [inferred] level, chosen so eight voices at full MIX stay under full scale.
+        return 0.58 * highPass2_.process (highPass_.process (centre_ * centre + side_ * sides).high).high;
     }
 
     bool wrapped() const noexcept { return wrapped_; }
+
+    // A saw's speed against the centre one, in steps of the 24-bit phase.
+    int stepsFromCentre (int saw) const noexcept
+    {
+        return static_cast<std::int32_t> (step_[static_cast<std::size_t> (saw)] - step_[3]) / 256;
+    }
 
 private:
     std::array<std::uint32_t, 7> phase_ {}, step_ {};
     double detune_ { -1.0 }, mix_ { -1.0 };
     double amount_ { 0.0 }, centre_ { 1.0 }, side_ { 0.0 };
-    Svf highPass_;
+    Svf highPass_, highPass2_;
     bool wrapped_ { false };
 };
 
