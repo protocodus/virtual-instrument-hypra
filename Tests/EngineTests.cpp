@@ -135,6 +135,19 @@ void hardwareRecording()
     near (10.0 * std::log10 (first / tenth), -0.83, 0.35, "measured high-pass at the fundamental");
 }
 
+void sawShape()
+{
+    // SHAPE 0. Two recordings, the JP-8000 note (Freesound 275439) and factory
+    // patch A33 (SynthMania), give the saw's harmonics as (1 + K / n^2) / n
+    // with K = 1.24 to 1.27, in phase with the saw.
+    std::vector<double> x (88200);
+    for (std::size_t i = 0; i < x.size(); ++i)
+        x[i] = osc::shapedSaw (std::fmod (i * 100.0 / kEngineRate, 1.0), 0.0);
+    const double h10 = 10.0 * tone (x, 1000.0);
+    for (int n = 1; n <= 4; ++n)
+        near (n * tone (x, 100.0 * n) / h10, 1.0 + 1.25 / (n * n), 0.04, "SHAPE 0 harmonic " + std::to_string (n));
+}
+
 void filter()
 {
     const auto gain = [] (FilterType type, bool steep, double hz)
@@ -310,6 +323,10 @@ void feedback()
         x.erase (x.begin(), x.begin() + 96000);
         return x;
     };
+    // SynthMania's recording of factory performance P14 holds a howl at
+    // 3.054 x B4 and another at 4.031 x E4: a harmonic of a loop 2 to 3
+    // samples shorter than the period, not the harmonic itself.
+    // Docs/research/hardware-ab-2026-11-22.md.
     double previous = 0.0;
     for (const int harmonics : { 18, 64, 110 })
     {
@@ -324,8 +341,9 @@ void feedback()
                 best = hz;
             }
         }
-        const double n = best / 220.0;
-        near (n, std::round (n), 0.03, "howl sits on a harmonic");
+        const double n = best / 220.0, period = kEngineRate / 220.0;
+        const double expected = std::round (n) * period / (period - mapping::feedbackLoopShortfall);
+        near (n, expected, 0.012, "howl sits on a harmonic of the short loop");
         check (n > previous + 0.5, "HARMONICS raises the howling harmonic");
         check (db (level / tone (x, 220.0, 48000)) > 6.0, "howl stands over the fundamental");
         previous = n;
@@ -421,7 +439,7 @@ void operator delete (void* p, std::size_t) noexcept { std::free (p); }
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
-        { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "Filter", filter }, { "Circuit", circuit },
+        { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "SawShape", sawShape }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)

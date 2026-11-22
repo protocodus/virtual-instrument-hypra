@@ -4,7 +4,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum supported macOS version")
 endif()
 
-project(Hypra VERSION 0.1.1 LANGUAGES CXX)
+project(Hypra VERSION 0.1.2 LANGUAGES CXX)
 
 # Source/DSP is C++17 and JUCE-free: the Rack Extension compiles it directly.
 set(CMAKE_CXX_STANDARD 17)
@@ -32,8 +32,11 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tools/RenderDemos.cpp")
     target_link_libraries(HypraRenderDemos PRIVATE HypraDSP)
 endif()
 
+add_executable(HypraRenderEvents Tools/RenderEvents.cpp)
+target_link_libraries(HypraRenderEvents PRIVATE HypraDSP)
+
 enable_testing()
-foreach(suite SuperSaw HardwareRecording Filter Circuit Engine Feedback Effects Stability)
+foreach(suite SuperSaw HardwareRecording SawShape Filter Circuit Engine Feedback Effects Stability)
     add_test(NAME Hypra.${suite} COMMAND HypraTests ${suite})
     set_tests_properties(Hypra.${suite} PROPERTIES LABELS unit)
 endforeach()

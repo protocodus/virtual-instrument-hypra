@@ -4,6 +4,7 @@
 
 | Short | Source | Used for |
 | --- | --- | --- |
+| Factory sounds | SynthMania's JP-8000 recordings of A33 JP-303 and P14 Feedback Lead, in [the A/B](hardware-ab-2026-11-22.md) | 12 dB low-pass, saw shape at the round end, tone-control corners, filter-envelope shape, feedback howl |
 | Recording | [JP-8080 note by FadedShadows, Freesound 275434, CC0](https://freesound.org/people/FadedShadows/sounds/275434/), measured in [the A/B](hardware-ab-2026-11-22.md) | supersaw high-pass, phase word, drift at Detune 0, output tilt |
 | SN-8000 | [Roland JP-8000 Service Notes, Jan 1997](https://archive.org/details/roland_JP-8000_SERVICE_NOTES) | parts, block diagram (p.15), DAC (p.23), panel B (p.27), jack board (p.30) |
 | SN-8080 | [Roland JP-8080 Service Notes, Jul 1998](https://archive.org/details/roland_JP-8080_SERVICE_NOTES) | clock (pp.13, 19), output (p.21), volume follower (p.27) |
@@ -64,6 +65,11 @@ at 34 and 73 kHz.
 | 24-bit phase at the documented 88.2 kHz | Recording: drift in whole steps of 88200 / 2^24 Hz |
 | Detune 0 amount 0.0027, floored products | Recording: steps -6, -4, -1, +1, +3, +5 |
 | No 1.06 kHz pole in the output | Recording; the JP-8000 file agrees |
+| -12 dB low-pass is a two-pole response, k 0.17 at A33's setting | A33, 0.46 dB on held-out notes |
+| SHAPE 0 saw is s + 2.056 (s - s^3) | A33 and the JP-8000 note: K = 1.26 and 1.24 |
+| Tone-control shelves near 250 Hz and 4.4 kHz | A33 |
+| Feedback loop 2 to 3 samples short of a period | P14, two notes |
+| Filter envelope decays exponentially (in octaves or in Hz) | A33, 72 notes |
 
 ## Inferred here
 
@@ -71,16 +77,16 @@ at 34 and 73 kHz.
 | --- | --- | --- |
 | Supersaw high-pass tracking | the same ratio and Q on every key and detune | a second recorded note |
 | Triangle Mod | triangle times two, offset, wrapped at the rails | one cycle at three offsets |
-| Saw and triangle SHAPE | morphs matching OM-8000 p.56's drawings | one cycle per slider step |
+| Saw SHAPE above 0, triangle SHAPE | morphs matching OM-8000 p.56's drawings | one cycle per slider step |
 | Noise cutoff | key-following, 11 octaves, two poles | swept spectra |
-| Feedback oscillator | one-period limited loop with a harmonic-selecting band-pass | recordings at several settings |
+| Feedback oscillator | limited loop with a mode-selecting band-pass, its gains and bloom | dry recordings at several settings |
 | X-mod | linear through-zero FM, square-law depth | sidebands against depth |
 | Sync | reset on the sample | spectrum at high ratios |
-| Filter | trapezoidal SVF, cascaded, amplitude-dependent damping | swept responses per resonance step |
+| Filter | 24 dB slope, the resonance law, amplitude-dependent damping | a -24 dB patch; swept responses per resonance step |
 | Cutoff, envelope, LFO, portamento tapers | exponential maps in `Mapping.h` | timed recordings |
 | Pitch and filter modulation spans | 24 semitones, 10 and 4 octaves | recordings at full depth |
 | Control rate | 2.76 kHz with interpolated cutoff and gain | stepping in a fast sweep |
-| Tone control | 12 dB shelves at 250 Hz and 4 kHz | swept response |
+| Tone control | 12 dB at full travel | swept response |
 | Chorus and flanger types | names from the manual, settings chosen here | impulse response per type |
 | Delay feedback and taper | 93 % maximum, square law | impulse response |
 | Headroom and clipping | hard clip at the end of the DSP | overdriven recording |

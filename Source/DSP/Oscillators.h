@@ -60,13 +60,16 @@ inline double square (double p, double width) noexcept
 
 // OM p.56: round with a strong fundamental at both ends, a plain saw a
 // quarter of the way up, thin ("as though an HPF were applied") in the centre.
+// [measured] The round end is the saw plus a cubic, s + 2.056 (s - s^3): two
+// recordings give harmonics (1 + 1.25 / n^2) / n in phase with the saw.
+// [inferred] the rest of the travel.
 inline double shapedSaw (double p, double shape) noexcept
 {
     const double saw = 2.0 * p - 1.0, fundamental = -sine (p);
     if (shape < 0.25)
     {
         const double a = 4.0 * std::max (0.0, shape);
-        return (1.0 - a) * (0.75 * fundamental + 0.25 * saw) + a * saw;
+        return (1.0 - a) * (saw + 2.056 * (saw - saw * saw * saw)) + a * saw;
     }
     if (shape < 0.5)
         return saw - 4.0 * (shape - 0.25) * 0.586 * fundamental;
@@ -199,8 +202,8 @@ private:
 
 // [inferred mechanism] OM p.56 says only that it resembles guitar feedback,
 // that AMOUNT sets the level of the harmonics and HARMONICS their sound.
-// Like a string in front of an amplifier: a saw drives a limited loop one
-// period long, so it can only ring on harmonics of the note, and a band-pass
+// Like a string in front of an amplifier: a saw drives a limited loop about
+// one period long, so it rings near harmonics of the note, and a band-pass
 // in the loop picks which one. It blooms after each attack and howls above
 // unity gain.
 class FeedbackOsc
@@ -219,10 +222,14 @@ public:
 
     void configure (double hz, double harmonics, double amount) noexcept
     {
-        target_ = std::clamp (kEngineRate / std::max (1.0, hz), 2.0, static_cast<double> (size - 3));
+        target_ = std::clamp (kEngineRate / std::max (1.0, hz) - mapping::feedbackLoopShortfall,
+                              2.0, static_cast<double> (size - 3));
         if (delay_ == 0.0)
             delay_ = target_;
-        band_.configure (std::clamp (hz * (1.0 + 7.0 * harmonics), 10.0, 18000.0), damping);
+        // The band-pass sits on the loop's own mode, so it picks the mode
+        // without pulling the howl back onto the note's harmonic.
+        const double mode = std::round (1.0 + 7.0 * harmonics) * kEngineRate / target_;
+        band_.configure (std::clamp (mode, 10.0, 18000.0), damping);
         bloom_ += onePole (0.8, kControlRate) * (1.0 - bloom_);
         amount_ = amount;
         loopGain_ = 1.8 * amount * (0.45 + 0.55 * bloom_);
@@ -237,7 +244,7 @@ public:
         const double a = buffer_[static_cast<std::size_t> (index & mask)];
         const double b = buffer_[static_cast<std::size_t> ((index + 1) & mask)];
         const double fed = damping * band_.process (a + fraction * (b - a)).band;
-        const double loop = softClip (0.15 * amount_ * saw + loopGain_ * fed);
+        const double loop = softClip (0.015 * amount_ * saw + loopGain_ * fed);
         buffer_[static_cast<std::size_t> (write_)] = static_cast<float> (loop);
         write_ = (write_ + 1) & mask;
         return saw * (0.8 - 0.62 * amount_) + 0.95 * amount_ * loop;
@@ -245,7 +252,7 @@ public:
 
 private:
     static constexpr int size = 8192, mask = size - 1;
-    static constexpr double damping = 1.25; // broad, so the howl stays in tune
+    static constexpr double damping = 0.5; // [inferred] selects one mode of the loop
     std::array<float, size> buffer_ {};
     int write_ { 0 };
     Svf band_;

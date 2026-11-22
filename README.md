@@ -6,10 +6,11 @@ once its sound is approved. "Hypra" is a working name. It is an independent
 original implementation, not affiliated with or licensed by Roland, and holds
 no firmware, ROM data, samples, captured audio or factory patch data.
 
-**Status: 0.1.1, for listening.** The engine is complete enough to judge the
+**Status: 0.1.2, for listening.** The engine is complete enough to judge the
 sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
-mode or motion control. One waveform has been matched to a recording of a
-JP-8080; the rest has not been compared with the hardware.
+mode or motion control. The supersaw, the saw's round end, the 12 dB filter,
+the tone control and the feedback howl have been checked against recordings
+of the hardware; the rest has not.
 
 ![Front-panel draft](Docs/screenshots/front-panel-draft-2x.png)
 
@@ -43,8 +44,9 @@ or inferred here.
 
 ## Known gaps
 
-- Only the supersaw at Detune 0 / Mix 0, on one note, and the output stage's
-  tilt have been checked against the hardware
+- Only the supersaw at Detune 0 / Mix 0 on one note, the saw at its round
+  end, the 12 dB low-pass, the tone control, the feedback howl's tuning and
+  the output stage's tilt have been checked against the hardware
   ([measurements](Docs/research/hardware-ab-2026-11-22.md)). Every
   `[inferred]` law is a placeholder until a recording tests it.
 - The feedback oscillator, the effects' modulation settings, the filter
@@ -60,6 +62,7 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.1.2 | The saw's round end and the feedback howl's tuning follow factory-patch recordings. |
 | 0.1.1 | The supersaw follows a recorded JP-8080: a four-pole tracked high-pass, which restores its fundamental, and the recorded drift at Detune 0. |
 | 0.1.0 | First proof of concept. |
 

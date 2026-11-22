@@ -1,4 +1,4 @@
-# A/B against two hardware recordings, 2026-11-22
+# A/B against hardware recordings, 2026-11-22
 
 The owner supplied both files. They are not committed.
 
@@ -78,3 +78,55 @@ settings are unknown.
 
 Other keys, detune and mix settings, the other six waveforms, filter,
 envelopes and effects. None of those appears in these recordings.
+
+## Round 2: five factory-sound recordings
+
+The owner approved these for private benchmarking. They are not committed.
+
+| File (source) | SHA-256 | Use |
+| --- | --- | --- |
+| A33 JP-303 (SynthMania) | `5b70b3fcaf19a4585e3d4c9626ec88c9db2b26e622247796a883c06dd3b32dd1` | Calibration: dry, mono, 203 notes |
+| P14 Feedback Lead (SynthMania) | `761a3a9ce11ced13c3be71e19d2f3ae82dd71701d0e5c33dc75b2e7d23e4e3df` | Howl tuning only: has ribbon and effects |
+| JP-8000 Super Saw demo (SynthMania) | `cdd2290e285acbe8a6e3b0f61990812db4ae6566938748e967cff107a71a0596` | Not used: wide stereo effects |
+| A34 Rave Time (SynthMania) | `d755fc865a7387005dabf3274685042da370e1da3819e7225c4de82c812723bf` | Not used: noise-led, effects |
+| Supersaw Arp 1 (Wikimedia Commons, CC BY-SA 3.0) | `8d9d846010f0b11f18d204c34bd7d5b8921a020deca8c776ac022fa5926eae96` | Not used: processed, hardware origin unclear |
+
+All are lossy.
+
+**A33, 12 dB low-pass.** 203 notes transcribed from onsets (136.5 BPM
+sixteenths, A = 440). Each clean 14-30 ms frame gave harmonic amplitudes.
+The filter, the waveform and a fixed EQ were fitted jointly on the first 11 s
+and tested on the rest, refitting only each frame's level and cutoff:
+
+| Filter | Fitted half | Held-out half |
+| --- | ---: | ---: |
+| 2-pole, one k | 0.32 dB | 0.46 dB |
+| 2-pole, k varying with cutoff | 0.32 dB | 0.42 dB |
+| 4-pole ladder | 2.35 dB | 2.65 dB |
+| two 2-pole sections, free | 3.22 dB | 3.48 dB |
+
+So the patch's -12 dB setting really is two poles (k 0.17).
+
+**Saw shape.** The same fit wants harmonics (1 + K / n^2) / n, K = 1.26,
+better than a boosted fundamental (0.56 dB held out) or a plain saw (1.09 dB).
+The JP-8000 note gives K = 1.24 to 1.27, zero phase. That is s + 2.056 (s - s^3),
+the round end of SHAPE. Whether A33 and the note are both at SHAPE 0 is an
+inference.
+
+**Tone control.** The fitted EQ is a +4.5 dB shelf at 251 Hz and +12 dB at
+4.4 kHz, beside the 250 Hz and 4 kHz first guessed.
+
+**Filter envelope.** Over 72 notes, exponential decay of the cutoff, in
+octaves or in Hz, fits to 0.016 octave; a straight line in octaves to 0.045.
+
+**Feedback howl.** P14 holds howls at 3.054 x B4 and 4.031 x E4, with their own
+harmonics and 27 Hz beats against the note's. A loop 3.1 and 2.0 samples
+short of the period at 88.2 kHz gives both. Two notes, with a ribbon on the
+patch: tentative.
+
+**Rebuilt phrase.** A33 played back by Hypra from the transcription with each
+note's fitted cutoff curve, level-matched per note and put through MP3:
+third-octave gap 3.0 dB on the fitted half, 3.7 dB held out. Most of the gap
+is where the cutoff curves could not be read (four notes in ten) and were
+filled in from neighbours, so that number measures the transcription as much
+as the engine.

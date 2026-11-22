@@ -42,6 +42,11 @@ inline double superSide (double mix) noexcept { return (-0.73764 * mix + 1.2841)
 inline constexpr double superHighPassRatio = 0.904;
 inline constexpr double superHighPassQ = 0.878;
 
+// [measured, two notes of factory performance P14] the feedback loop runs
+// this many samples short of one period, so its howl beats against the
+// harmonic it sits beside.
+inline constexpr double feedbackLoopShortfall = 2.5;
+
 // [inferred] Ten octaves from 20 Hz.
 inline double cutoffOctaves (int value) noexcept { return 10.0 * unit (value); }
 inline double cutoffHz (double octaves) noexcept
