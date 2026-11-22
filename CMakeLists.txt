@@ -33,7 +33,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tools/RenderDemos.cpp")
 endif()
 
 enable_testing()
-foreach(suite SuperSaw Filter Circuit Engine Effects Stability)
+foreach(suite SuperSaw Filter Circuit Engine Feedback Effects Stability)
     add_test(NAME Hypra.${suite} COMMAND HypraTests ${suite})
     set_tests_properties(Hypra.${suite} PROPERTIES LABELS unit)
 endforeach()

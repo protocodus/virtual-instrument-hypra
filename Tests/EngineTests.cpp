@@ -247,6 +247,42 @@ void engine()
     check (allocations == 0, "no allocation on the audio thread");
 }
 
+void feedback()
+{
+    // OM p.56: like guitar feedback, with AMOUNT setting the level of the
+    // harmonics. A howl has to sit on a harmonic of the played note and
+    // HARMONICS has to choose a different one.
+    const auto howl = [] (int harmonics, int amount)
+    {
+        Patch p;
+        p.osc1 = { Wave1::FeedbackOsc, harmonics, amount };
+        p.balance = -64;
+        auto x = renderNote (p, 48000, 3.0, 57);
+        x.erase (x.begin(), x.begin() + 96000);
+        return x;
+    };
+    double previous = 0.0;
+    for (const int harmonics : { 18, 64, 110 })
+    {
+        const auto x = howl (harmonics, 127);
+        double best = 0.0, level = 0.0;
+        for (int n = 1; n <= 12; ++n)
+        {
+            const double hz = peakHz (x, 220.0 * n - 20, 220.0 * n + 20, 1.0, 48000);
+            if (const double a = tone (x, hz, 48000); a > level)
+            {
+                level = a;
+                best = hz;
+            }
+        }
+        const double n = best / 220.0;
+        near (n, std::round (n), 0.03, "howl sits on a harmonic");
+        check (n > previous + 0.5, "HARMONICS raises the howling harmonic");
+        check (db (level / tone (x, 220.0, 48000)) > 6.0, "howl stands over the fundamental");
+        previous = n;
+    }
+}
+
 void effects()
 {
     // OM p.65: delay times with TIME fully right.
@@ -337,7 +373,7 @@ int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "Filter", filter }, { "Circuit", circuit },
-        { "Engine", engine }, { "Effects", effects }, { "Stability", stability } };
+        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

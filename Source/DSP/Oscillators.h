@@ -80,7 +80,7 @@ inline double shapedTriangle (double p, double shape) noexcept
     if (shape < 0.5)
         return t + 2.0 * std::max (0.0, shape) * (cusp - t);
     const double a = 2.0 * (std::min (1.0, shape) - 0.5);
-    return (1.0 - a) * cusp + a * 0.9 * sine (0.75 * t);
+    return (1.0 - a) * cusp + a * 0.9 * sine (0.43 * t);
 }
 
 // OM p.55: a triangle wrapped at the rails. OFFSET moves the wrap points,
@@ -181,8 +181,10 @@ private:
 
 // [inferred mechanism] OM p.56 says only that it resembles guitar feedback,
 // that AMOUNT sets the level of the harmonics and HARMONICS their sound.
-// A saw drives a limited delay loop tuned between the 1st and 8th harmonic;
-// the loop blooms after each attack and howls above unity gain.
+// Like a string in front of an amplifier: a saw drives a limited loop one
+// period long, so it can only ring on harmonics of the note, and a band-pass
+// in the loop picks which one. It blooms after each attack and howls above
+// unity gain.
 class FeedbackOsc
 {
 public:
@@ -190,7 +192,8 @@ public:
     {
         buffer_.fill (0.0f);
         write_ = 0;
-        damped_ = dc_ = bloom_ = 0.0;
+        band_.reset();
+        bloom_ = 0.0;
         delay_ = 0.0;
     }
 
@@ -198,14 +201,13 @@ public:
 
     void configure (double hz, double harmonics, double amount) noexcept
     {
-        const double loopHz = std::max (1.0, hz) * (1.0 + 7.0 * harmonics);
-        damping_ = onePole (std::clamp (4.0 * loopHz, 1500.0, 12000.0));
-        const double samples = kEngineRate / loopHz - (1.0 - damping_) / damping_;
-        target_ = std::clamp (samples, 2.0, static_cast<double> (size - 3));
+        target_ = std::clamp (kEngineRate / std::max (1.0, hz), 2.0, static_cast<double> (size - 3));
         if (delay_ == 0.0)
             delay_ = target_;
-        amount_ = amount;
+        band_.configure (std::clamp (hz * (1.0 + 7.0 * harmonics), 10.0, 18000.0), damping);
         bloom_ += onePole (0.8, kControlRate) * (1.0 - bloom_);
+        amount_ = amount;
+        loopGain_ = 1.8 * amount * (0.45 + 0.55 * bloom_);
     }
 
     double process (double saw) noexcept
@@ -216,21 +218,21 @@ public:
         const double fraction = position - index;
         const double a = buffer_[static_cast<std::size_t> (index & mask)];
         const double b = buffer_[static_cast<std::size_t> ((index + 1) & mask)];
-        damped_ += damping_ * (a + fraction * (b - a) - damped_);
-        dc_ += 0.003 * (damped_ - dc_);
-        const double fed = damped_ - dc_;
-        const double loop = softClip (0.3 * amount_ * saw + 1.18 * amount_ * (0.45 + 0.55 * bloom_) * fed);
+        const double fed = damping * band_.process (a + fraction * (b - a)).band;
+        const double loop = softClip (0.15 * amount_ * saw + loopGain_ * fed);
         buffer_[static_cast<std::size_t> (write_)] = static_cast<float> (loop);
         write_ = (write_ + 1) & mask;
-        return saw * (0.8 - 0.55 * amount_) + 0.9 * amount_ * loop;
+        return saw * (0.8 - 0.62 * amount_) + 0.95 * amount_ * loop;
     }
 
 private:
     static constexpr int size = 8192, mask = size - 1;
+    static constexpr double damping = 1.25; // broad, so the howl stays in tune
     std::array<float, size> buffer_ {};
     int write_ { 0 };
-    double damped_ { 0.0 }, dc_ { 0.0 }, bloom_ { 0.0 }, amount_ { 0.0 };
-    double delay_ { 0.0 }, target_ { 100.0 }, damping_ { 0.5 };
+    Svf band_;
+    double bloom_ { 0.0 }, amount_ { 0.0 }, loopGain_ { 0.0 };
+    double delay_ { 0.0 }, target_ { 100.0 };
 };
 
 // OSC 1, OSC 2 and the three functions between them, wired as OM p.59:
