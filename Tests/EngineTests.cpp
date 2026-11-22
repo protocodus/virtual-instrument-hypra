@@ -228,6 +228,23 @@ void engine()
     e.render (l, r, 480);
     check (e.activeVoices() == 1, "feedback oscillator is monophonic (OM p.56)");
 
+    // JP-8080 OM: UNISON sounds all the part's voices, and cannot be turned
+    // on for the feedback oscillator.
+    fb.unison = true;
+    e.reset();
+    e.setPatch (Part::Upper, fb);
+    e.noteOn (60, 100);
+    e.render (l, r, 480);
+    check (e.activeVoices() == 1, "no unison with the feedback oscillator");
+    fb.unison = false;
+    Patch stacked = p;
+    stacked.unison = true;
+    e.reset();
+    e.setPatch (Part::Upper, stacked);
+    e.noteOn (60, 100);
+    e.render (l, r, 480);
+    check (e.activeVoices() == 8, "unison sounds all eight voices");
+
     e.reset();
     e.setMode (KeyMode::Dual);
     e.setPatch (Part::Lower, p);

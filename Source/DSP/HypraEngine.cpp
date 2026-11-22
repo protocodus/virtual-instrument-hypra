@@ -4,6 +4,12 @@ namespace hypra
 {
 namespace
 {
+// JP-8080 OM: UNISON cannot be turned on with FEEDBACK OSC.
+bool unison (const Patch& p) noexcept
+{
+    return p.unison && p.osc1.wave != Wave1::FeedbackOsc;
+}
+
 bool monophonic (const Patch& p) noexcept
 {
     // OM p.56: FEEDBACK OSC sounds one note at a time.
@@ -87,7 +93,7 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
     const int part = static_cast<int> (which);
     PartState& s = parts_[static_cast<std::size_t> (part)];
     const bool becameMono = monophonic (patch)
-                            && (! monophonic (s.patch) || patch.unison != s.patch.unison);
+                            && (! monophonic (s.patch) || unison (patch) != unison (s.patch));
     s.patch = patch;
     s.lfoStep = mapping::lfoHz (patch.lfo1.rate) / kControlRate;
     s.lfo2Step = mapping::lfoHz (patch.lfo2.rate) / kControlRate;
@@ -113,7 +119,7 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
         };
         set (v.ampEnv, patch.amp);
         set (v.filterEnv, patch.filter.env);
-        if (becameMono && i - range.first >= (patch.unison ? std::min (4, range.count) : 1))
+        if (becameMono && i - range.first >= (unison (patch) ? range.count : 1))
             release (v);
     }
 }
@@ -177,7 +183,7 @@ void Engine::startMono (int part, int note, int velocity, bool retrigger) noexce
 {
     const PartState& s = parts_[static_cast<std::size_t> (part)];
     const Span range = span (part);
-    const int count = s.patch.unison ? std::min (4, range.count) : 1;
+    const int count = unison (s.patch) ? range.count : 1;
     for (int i = 0; i < range.count; ++i)
     {
         Voice& v = voices_[static_cast<std::size_t> (range.first + i)];
@@ -335,7 +341,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
 
     const double common = v.pitch + v.detune + 12.0 * std::clamp (p.oscShift, -2, 2)
                           + bend_ * (bend_ >= 0.0 ? p.bendUp : p.bendDown)
-                          + mod_ * 2.0 * unit (p.lfo2.pitch) * s.lfo2
+                          + mod_ * 2.0 * bipolar (p.lfo2.pitch) * s.lfo2
                           + (part == 1 ? partDetune_ / 100.0 : 0.0);
     const double pitch1 = common + (p.destination == ModDestination::Osc1And2 ? semis : 0.0);
     const double pitch2 = common + mapping::osc2Semitones (p.osc2) + (toXmod ? 0.0 : semis);
@@ -377,7 +383,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
                            + mapping::keyFollow (p.filter.keyFollow) * (v.pitch - 60.0) / 12.0
                            + mapping::filterEnvOctaves * bipolar (p.filter.envDepth) * v.filterEnv.value()
                            + mapping::filterLfoOctaves * bipolar (p.filter.lfoDepth) * lfo
-                           + mod_ * 4.0 * unit (p.lfo2.filter) * s.lfo2
+                           + mod_ * 4.0 * bipolar (p.lfo2.filter) * s.lfo2
                            + velocityDepth;
     v.filter.configure (mapping::cutoffHz (octaves), unit (p.filter.resonance), p.filter.type, p.filter.steep);
 
@@ -385,9 +391,9 @@ void Engine::controlVoice (Voice& v, int part) noexcept
                   * (1.0 - unit (p.velocityAmp) * (1.0 - v.velocity));
     if (p.pan == PanMode::Off)
         gain *= 1.0 + 0.9 * bipolar (p.ampLfo) * lfo;
-    gain *= 1.0 + 0.9 * mod_ * unit (p.lfo2.amp) * s.lfo2;
-    if (p.unison)
-        gain *= 0.6; // four stacked voices
+    gain *= 1.0 + 0.9 * mod_ * bipolar (p.lfo2.amp) * s.lfo2;
+    if (unison (p)) // the stack's phases are unrelated, so it adds in power
+        gain *= 1.25 / std::sqrt (static_cast<double> (span (part).count));
     v.gainStep = (gain - v.gain) / kControlInterval;
 }
 

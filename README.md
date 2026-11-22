@@ -1,0 +1,73 @@
+# Hypra
+
+Hypra is a proof of concept of an eight-voice virtual-analog synthesizer
+modelling the Roland JP-8000 (1997), meant to become a Reason Rack Extension
+once its sound is approved. "Hypra" is a working name. It is an independent
+original implementation, not affiliated with or licensed by Roland, and holds
+no firmware, ROM data, samples, captured audio or factory patch data.
+
+**Status: 0.1.0, for listening.** The engine is complete enough to judge the
+sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
+mode or motion control. It has never been compared with a recording of the
+hardware.
+
+![Front-panel draft](Docs/screenshots/front-panel-draft-2x.png)
+
+The panel is a concept, not a built device.
+
+---
+
+## How it works
+
+The JP-8000 is a digital instrument: four Toshiba TC170C140 DSPs compute the
+voices and effects, and only the stage from the DAC to the jacks is analogue.
+So the model has two halves.
+
+- **The DSP, as behaviour.** 88.2 kHz inside whatever the host rate, naive
+  oscillators that alias, 24-bit phase, 7-bit controls, sample-accurate but
+  uncorrected sync, hard clipping at full scale, an 18-bit DAC. There is no
+  invented analogue drift, because the hardware has none.
+- **The output stage, as a circuit.** Every resistor and capacitor between
+  the DAC and the line jack, solved from the 1997 service notes and
+  discretised at 705.6 kHz.
+
+The signal path is `OSC 1 + OSC 2 (sync, ring, X-mod) -> filter -> amp ->
+tone control -> delay -> chorus -> pan -> DAC -> output circuit`, for two
+parts sharing eight voices. Unison comes from the JP-8080; the JP-8000 has no
+unison switch.
+
+[The hardware model](Docs/research/hardware-model-2026-11-22.md) says for
+each mechanism whether it is settled by a document, measured by someone else,
+or inferred here.
+
+## Known gaps
+
+- No recording of the hardware has been compared. Every `[inferred]` law is
+  a placeholder until one is.
+- The feedback oscillator, the effects' modulation settings, the filter
+  algorithm and all envelope, LFO and cutoff tapers are inferred.
+- The JP-8000's service notes mark a 1.06 kHz pole in the main output which
+  the JP-8080's do not have; see `Docs/decisions.md`.
+- Split mode, arpeggiator, RPS, motion control, ribbon, velocity assign,
+  tempo sync and SysEx are not implemented.
+- About 4 % of one Apple silicon core with eight voices at 48 kHz, 2.7 % of
+  it the fixed output stage. Not measured in Reason or under phdsp64.
+
+## Build
+
+```sh
+cmake -S . -B build-dsp -DCMAKE_BUILD_TYPE=Release
+cmake --build build-dsp --parallel 2
+ctest --test-dir build-dsp --output-on-failure
+./build-dsp/HypraRenderDemos deliverables/demos
+python3 Tools/panel/render_front.py
+```
+
+The panel script needs Pillow, the macOS Arial fonts and a
+`reason-rack-extension` checkout beside this one for the stock widgets.
+
+## Licensing
+
+Source-available under the [PolyForm Noncommercial licence](LICENSE). Roland,
+JP-8000 and JP-8080 are trademarks of Roland Corporation, used only to name
+the modelled instrument.
