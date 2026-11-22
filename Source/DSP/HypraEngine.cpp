@@ -16,8 +16,10 @@ bool monophonic (const Patch& p) noexcept
     return p.mono || p.legato || p.unison || p.osc1.wave == Wave1::FeedbackOsc;
 }
 
-// Per-voice and part level, leaving room for eight voices below DAC clipping.
-constexpr double voiceHeadroom = 0.22;
+// [measured, black box] One plain-saw voice at LEVEL 100 peaks at 0.0646 of
+// full scale. With the saw at 0.8 and the inferred square law for LEVEL,
+// that is this factor.
+constexpr double voiceHeadroom = 0.130;
 } // namespace
 
 void Engine::prepare (double hostRate, std::uint32_t seed)
@@ -385,7 +387,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
                            + mapping::filterLfoOctaves * bipolar (p.filter.lfoDepth) * lfo
                            + mod_ * 4.0 * bipolar (p.lfo2.filter) * s.lfo2
                            + velocityDepth;
-    v.filter.configure (mapping::cutoffHz (octaves), unit (p.filter.resonance), p.filter.type, p.filter.steep);
+    v.filter.configure (mapping::cutoffCoefficient (octaves), unit (p.filter.resonance), p.filter.type, p.filter.steep);
 
     double gain = voiceHeadroom * unit (p.level) * unit (p.level)
                   * (1.0 - unit (p.velocityAmp) * (1.0 - v.velocity));

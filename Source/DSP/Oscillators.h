@@ -54,27 +54,17 @@ inline double triangle (double p) noexcept { return 1.0 - 4.0 * std::abs (p - 0.
 // Mean removed, as a pulse wave at the jack has none.
 inline double square (double p, double width) noexcept
 {
-    const double duty = 0.5 + 0.47 * std::clamp (width, 0.0, 1.0);
+    const double duty = mapping::pulseDuty (width);
     return (p < duty ? 1.0 : -1.0) - (2.0 * duty - 1.0);
 }
 
-// OM p.56: round with a strong fundamental at both ends, a plain saw a
-// quarter of the way up, thin ("as though an HPF were applied") in the centre.
-// [measured] The round end is the saw plus a cubic, s + 2.056 (s - s^3): two
-// recordings give harmonics (1 + 1.25 / n^2) / n in phase with the saw.
-// [inferred] the rest of the travel.
+// [measured, black box] SHAPE: round at 0, a plain saw at 32, then the
+// fundamental falls away and inverts; see mapping::sawShapeK.
 inline double shapedSaw (double p, double shape) noexcept
 {
-    const double saw = 2.0 * p - 1.0, fundamental = -sine (p);
-    if (shape < 0.25)
-    {
-        const double a = 4.0 * std::max (0.0, shape);
-        return (1.0 - a) * (saw + 2.056 * (saw - saw * saw * saw)) + a * saw;
-    }
-    if (shape < 0.5)
-        return saw - 4.0 * (shape - 0.25) * 0.586 * fundamental;
-    const double a = 2.0 * (std::min (1.0, shape) - 0.5);
-    return (1.0 - a) * (saw - 0.586 * fundamental) + a * 0.85 * fundamental;
+    const double saw = 2.0 * p - 1.0;
+    // (pi^2 / 6)(s - s^3) is the wave whose harmonics are the saw's over n^2.
+    return saw + mapping::sawShapeK (shape) * 1.6449340668 * (saw - saw * saw * saw);
 }
 
 // OM p.56: triangle, cusped in the centre, folded double humps at the top.
@@ -87,11 +77,11 @@ inline double shapedTriangle (double p, double shape) noexcept
     return (1.0 - a) * cusp + a * 0.9 * sine (0.43 * t);
 }
 
-// OM p.55: a triangle wrapped at the rails. OFFSET moves the wrap points,
-// which makes alternate segments unequal and cancels most of the fundamental.
+// [measured, black box] A triangle times a gain of 2 to 1.375, wrapped at
+// the rails.
 inline double triangleMod (double p, double offset) noexcept
 {
-    double y = 2.0 * triangle (p) + 0.95 * std::clamp (offset, 0.0, 1.0);
+    double y = mapping::triangleModGain (offset) * triangle (p);
     if (y > 1.0)
         y -= 2.0;
     else if (y < -1.0)
@@ -315,6 +305,8 @@ public:
 
     double process (Random& random) noexcept
     {
+        // [measured, black box] Levels against the plain saw (0.8 here):
+        // pulse 0.82, triangle 1.60, triangle mod 0.86.
         double first = 0.0;
         bool wrapped;
         if (c_.wave1 == Wave1::SuperSaw)
@@ -332,12 +324,12 @@ public:
             switch (c_.wave1)
             {
                 case Wave1::SuperSaw: break;
-                case Wave1::TriangleMod: first = 0.7 * osc::triangleMod (p, c_.ctrl1); break;
+                case Wave1::TriangleMod: first = 0.685 * osc::triangleMod (p, c_.ctrl1); break;
                 case Wave1::Noise: first = noise_.process (random); break;
                 case Wave1::FeedbackOsc: first = feedback_.process (2.0 * p - 1.0); break;
-                case Wave1::Square: first = 0.6 * osc::square (p, c_.ctrl1); break;
+                case Wave1::Square: first = 0.66 * osc::square (p, c_.ctrl1); break;
                 case Wave1::Saw: first = 0.8 * osc::shapedSaw (p, c_.ctrl1); break;
-                case Wave1::Triangle: first = 0.9 * osc::shapedTriangle (p, c_.ctrl1); break;
+                case Wave1::Triangle: first = 1.28 * osc::shapedTriangle (p, c_.ctrl1); break;
             }
         }
 
@@ -347,9 +339,9 @@ public:
         double second = 0.0;
         switch (c_.wave2)
         {
-            case Wave2::Square: second = 0.6 * osc::square (p2, c_.width2); break;
+            case Wave2::Square: second = 0.66 * osc::square (p2, c_.width2); break;
             case Wave2::Saw: second = 0.8 * (2.0 * p2 - 1.0); break;
-            case Wave2::Triangle: second = 0.9 * osc::triangle (p2); break;
+            case Wave2::Triangle: second = 1.28 * osc::triangle (p2); break;
         }
         last2_ = second;
         if (c_.ring)

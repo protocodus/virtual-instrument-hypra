@@ -2,7 +2,7 @@
 // recordings: HypraRenderEvents <events.txt> <out.f32> <rate> <seconds>
 //
 // One event a line, "<seconds> <name> <value>...": note <key> <velocity>,
-// off <key>, set <parameter> <value>, or node rack|printed. Writes mono
+// off <key>, set <parameter> <value>, or node rack|printed|digital. Writes mono
 // float32 (the left channel). Lines starting with # are ignored.
 #include "HypraEngine.h"
 
@@ -110,7 +110,8 @@ int main (int argc, char** argv)
         {
             std::string node;
             words >> node;
-            engine->setOutputNode (node == "printed" ? OutputNode::KeyboardAsPrinted : OutputNode::Rack);
+            engine->setOutputNode (node == "printed" ? OutputNode::KeyboardAsPrinted
+                                   : node == "digital" ? OutputNode::Digital : OutputNode::Rack);
         }
         else
         {

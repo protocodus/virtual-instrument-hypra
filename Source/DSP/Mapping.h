@@ -30,6 +30,15 @@ inline double table (const std::array<double, N>& points, double knob) noexcept
     const double low = lo == 0.0 ? 0.0 : lo - 1.0, high = i + 2 == N ? 127.0 : hi - 1.0;
     return points[i] + (points[i + 1] - points[i]) * (at - low) / (high - low);
 }
+
+// The same for points at 0, 8 ... 120 and 127.
+inline double table8 (const std::array<double, 17>& points, double knob) noexcept
+{
+    const double at = std::clamp (knob, 0.0, 1.0) * 127.0;
+    const std::size_t i = std::min<std::size_t> (static_cast<std::size_t> (at / 8.0), 15);
+    const double low = 8.0 * static_cast<double> (i), high = i == 15 ? 127.0 : low + 8.0;
+    return points[i] + (points[i + 1] - points[i]) * (at - low) / (high - low);
+}
 } // namespace detail
 
 // [measured] A. Szabo, "How to Emulate the Super Saw", KTH 2010, Table 2:
@@ -62,11 +71,47 @@ inline constexpr double superHighPassQ = 0.878;
 // harmonic it sits beside.
 inline constexpr double feedbackLoopShortfall = 2.5;
 
-// [inferred] Ten octaves from 20 Hz.
-inline double cutoffOctaves (int value) noexcept { return 10.0 * unit (value); }
-inline double cutoffHz (double octaves) noexcept
+// The laws below marked [measured, black box] come from JE-8086 2.2.27
+// running JP-8000 system 1.05, played over MIDI and analysed from its output
+// only (Docs/research/black-box-je8086-2026-11-22.md).
+
+// [measured, black box] Pulse width: 50 % at 0, plus 1/256 per step.
+inline double pulseDuty (double width) noexcept { return 0.5 + std::clamp (width, 0.0, 1.0) * 127.0 / 256.0; }
+
+// [measured, black box] Saw SHAPE adds K (1/n^2) to every harmonic of the
+// saw. K at 0, 8 ... 120, 127; the values at 40 and 120 are interpolated.
+inline constexpr std::array<double, 17> sawShapeTable {
+    1.267, 0.904, 0.575, 0.307, -0.005, -0.306, -0.607, -0.914, -1.210,
+    -1.529, -1.822, -2.115, -2.418, -2.731, -3.035, -3.290, -3.523
+};
+inline double sawShapeK (double shape) noexcept { return detail::table8 (sawShapeTable, shape); }
+
+// [measured, black box] Triangle mod wraps the triangle times this gain.
+inline double triangleModGain (double offset) noexcept
 {
-    return std::clamp (20.0 * std::exp2 (octaves), 10.0, 0.45 * kEngineRate);
+    return std::clamp (2.1175 - std::clamp (offset, 0.0, 1.0) * 127.0 / 128.0, 1.375, 2.015);
+}
+
+// [measured, black box] The filter coefficient rises a semitone per step of
+// CUTOFF FREQ and is 0.039016 (548 Hz) at 64; it stops at 1. "Octaves" here
+// are twelve steps of the control.
+inline double cutoffOctaves (int value) noexcept { return std::clamp (value, 0, 127) / 12.0; }
+inline double cutoffCoefficient (double octaves) noexcept
+{
+    return std::clamp (0.039016 * std::exp2 (octaves - 64.0 / 12.0), 1.0e-4, 1.0);
+}
+
+// [measured, black box] Damping q of each filter section at RESONANCE 0, 32,
+// 64, 96, 112 and 127.
+inline double resonanceQ (double resonance) noexcept
+{
+    constexpr double at[] { 0.0, 32.0, 64.0, 96.0, 112.0, 127.0 };
+    constexpr double q[] { 0.993, 0.639, 0.287, 0.0748, 0.0209, 0.004 };
+    const double r = std::clamp (resonance, 0.0, 1.0) * 127.0;
+    int i = 0;
+    while (i < 4 && r > at[i + 1])
+        ++i;
+    return q[i] + (q[i + 1] - q[i]) * (r - at[i]) / (at[i + 1] - at[i]);
 }
 
 // [settled] OM p.61: +32 is 100 %, -64 is -200 %.

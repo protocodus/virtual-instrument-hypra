@@ -5,6 +5,7 @@
 | Short | Source | Used for |
 | --- | --- | --- |
 | Factory sounds | SynthMania's JP-8000 recordings of A33 JP-303 and P14 Feedback Lead, in [the A/B](hardware-ab-2026-11-22.md) | 12 dB low-pass, saw shape at the round end, tone-control corners, filter-envelope shape, feedback howl |
+| Black box | JE-8086 running JP-8000 system 1.05, measured as an instrument: [method and results](black-box-je8086-2026-11-22.md) | filter structure, cutoff and resonance laws, saw SHAPE, pulse width, triangle mod, waveform levels |
 | Recording | [JP-8080 note by FadedShadows, Freesound 275434, CC0](https://freesound.org/people/FadedShadows/sounds/275434/), measured in [the A/B](hardware-ab-2026-11-22.md) | supersaw high-pass, phase word, drift at Detune 0, output tilt |
 | SN-8000 | [Roland JP-8000 Service Notes, Jan 1997](https://archive.org/details/roland_JP-8000_SERVICE_NOTES) | parts, block diagram (p.15), DAC (p.23), panel B (p.27), jack board (p.30) |
 | SN-8080 | [Roland JP-8080 Service Notes, Jul 1998](https://archive.org/details/roland_JP-8080_SERVICE_NOTES) | clock (pp.13, 19), output (p.21), volume follower (p.27) |
@@ -80,14 +81,13 @@ at 34 and 73 kHz.
 
 | Mechanism | Choice | What would settle it |
 | --- | --- | --- |
+| Triangle SHAPE above 0 | a cusp, then a fold; captured but not yet modelled | a model that fits the captures |
 | Supersaw high-pass tracking | the same ratio and Q on every key and detune | a second recorded note |
-| Triangle Mod | triangle times two, offset, wrapped at the rails | one cycle at three offsets |
-| Saw SHAPE above 0, triangle SHAPE | morphs matching OM-8000 p.56's drawings | one cycle per slider step |
 | Noise cutoff | key-following, 11 octaves, two poles | swept spectra |
 | Feedback oscillator | limited loop with a mode-selecting band-pass, its gains and bloom | dry recordings at several settings |
 | X-mod | linear through-zero FM, square-law depth | sidebands against depth |
 | Sync | reset on the sample | spectrum at high ratios |
-| Filter | 24 dB slope, the resonance law, amplitude-dependent damping | a -24 dB patch; swept responses per resonance step |
+| Filter modulation spans in the new semitone scale | env 10, LFO 4 "octaves" of twelve steps | black-box sweeps |
 | Cutoff, envelope, LFO, portamento tapers | exponential maps in `Mapping.h` | timed recordings |
 | Pitch and filter modulation spans | 24 semitones, 10 and 4 octaves | recordings at full depth |
 | Control rate | 2.76 kHz with interpolated cutoff and gain | stepping in a fast sweep |

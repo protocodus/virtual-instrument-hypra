@@ -6,11 +6,13 @@ once its sound is approved. "Hypra" is a working name. It is an independent
 original implementation, not affiliated with or licensed by Roland, and holds
 no firmware, ROM data, samples, captured audio or factory patch data.
 
-**Status: 0.1.3, for listening.** The engine is complete enough to judge the
+**Status: 0.2.0, for listening.** The engine is complete enough to judge the
 sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
-mode or motion control. The supersaw, the saw's round end, the 12 dB filter,
-the tone control and the feedback howl have been checked against recordings
-of the hardware; the rest has not.
+mode or motion control. The saw, pulse and triangle-mod waveforms and the
+filter are fitted to an emulator running the JP-8000's own system software,
+played as a black box, and agree with it within 0.2 dB. The supersaw is
+fitted to a recording of a JP-8080. Envelopes, LFOs, the triangle's SHAPE,
+the feedback oscillator and the effects are still estimates.
 
 ![Front-panel draft](Docs/screenshots/front-panel-draft-2x.png)
 
@@ -62,6 +64,7 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.2.0 | The filter, saw SHAPE, pulse width and triangle mod follow black-box measurements of JE-8086: a different filter structure, cutoff a semitone per step, a measured resonance curve, -24 dB as two identical stages. |
 | 0.1.3 | Detune and Mix follow Szabo's measured tables instead of his fitted curves: the sides are 14 % quieter at Mix 0. |
 | 0.1.2 | The saw's round end and the feedback howl's tuning follow factory-patch recordings. |
 | 0.1.1 | The supersaw follows a recorded JP-8080: a four-pole tracked high-pass, which restores its fundamental, and the recorded drift at Detune 0. |

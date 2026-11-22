@@ -1,10 +1,12 @@
-// [inferred topology] OM pp.59-61 gives three types, two slopes and
-// oscillation at full resonance. The DSP algorithm is not published, so this
-// is a trapezoidal state-variable section, twice for -24 dB/oct.
+// Filters. Svf is a trapezoidal section used inside the oscillators; Filter
+// is the voice filter.
 #pragma once
 
 #include "Core.h"
 #include "HypraPatch.h"
+#include "Mapping.h"
+
+#include <array>
 
 namespace hypra
 {
@@ -47,25 +49,33 @@ private:
     double s1_ { 0.0 }, s2_ { 0.0 };
 };
 
+// [measured, black box] The voice filter. Its response fits a Chamberlin
+// state-variable section at 88.2 kHz to 0.02 dB: all-pole low-pass, with the
+// band and high outputs for the other types. -24 dB is two identical
+// sections. The -24 dB output is scaled by the damping q; the -12 dB output
+// by min(1, 0.5 + 2.8 q), a fit to three measured resonance settings.
 class Filter
 {
 public:
     void reset() noexcept
     {
-        first_.reset();
-        second_.reset();
+        low_ = { 0.0, 0.0 };
+        band_ = { 0.0, 0.0 };
         fresh_ = true;
     }
 
-    void configure (double hz, double resonance, FilterType type, bool steep) noexcept
+    // coefficient = 2 sin(pi fc / 88200), from mapping::cutoffCoefficient.
+    void configure (double coefficient, double resonance, FilterType type, bool steep) noexcept
     {
-        if (type != type_ || steep != steep_ || resonance != resonance_)
-            setShape (resonance, type, steep);
-        gTarget_ = std::tan (kPi * std::min (hz, 0.45 * kEngineRate) / kEngineRate);
+        type_ = type;
+        steep_ = steep;
+        q_ = mapping::resonanceQ (resonance);
+        gain_ = steep ? q_ : std::min (1.0, 0.5 + 2.8 * q_);
+        target_ = std::clamp (coefficient, 1.0e-4, 1.0);
         if (fresh_)
-            g_ = gTarget_;
+            f_ = target_;
         fresh_ = false;
-        step_ = (gTarget_ - g_) / kControlInterval;
+        step_ = (target_ - f_) / kControlInterval;
         left_ = kControlInterval;
     }
 
@@ -74,44 +84,30 @@ public:
         if (left_ > 0)
         {
             --left_;
-            g_ += step_;
+            f_ += step_;
         }
-        x *= inputGain_;
-        if (! steep_)
-            return select (second_.processLimited (x, g_, k2_));
-        const double y = select (first_.processLimited (x, g_, k1_));
-        return outputGain_ * select (second_.processLimited (y, g_, k2_));
+        double y = section (0, x);
+        if (steep_)
+            y = section (1, y);
+        return gain_ * y;
     }
 
 private:
-    void setShape (double resonance, FilterType type, bool steep) noexcept
+    double section (std::size_t i, double x) noexcept
     {
-        type_ = type;
-        steep_ = steep;
-        resonance_ = resonance;
-        const double r = std::clamp (resonance, 0.0, 1.0);
-        const bool band = type == FilterType::BandPass;
-        // Butterworth dampings at zero resonance; just negative at the top.
-        const double q1 = band ? 1.41421356 : 1.84775907;
-        const double q2 = ! steep || band ? 1.41421356 : 0.76536686;
-        k1_ = q1 + (1.0 - q1) * r;
-        k2_ = q2 * std::pow (1.0 - r, 1.8) - 0.012 * std::pow (r, 10.0);
-        inputGain_ = 1.0 / (1.0 + 1.2 * r); // [inferred] level compensation
-        outputGain_ = band ? 1.5 : 1.0;
+        low_[i] += f_ * band_[i];
+        const double high = x - low_[i] - q_ * band_[i];
+        band_[i] += f_ * high;
+        // Fixed point would saturate; this only stops a runaway.
+        band_[i] = std::clamp (band_[i], -64.0, 64.0);
+        low_[i] = std::clamp (low_[i], -64.0, 64.0);
+        return type_ == FilterType::LowPass ? low_[i] : type_ == FilterType::BandPass ? band_[i] : high;
     }
 
-    double select (const Svf::Out& out) const noexcept
-    {
-        return type_ == FilterType::LowPass ? out.low
-             : type_ == FilterType::BandPass ? out.band : out.high;
-    }
-
-    Svf first_, second_;
+    std::array<double, 2> low_ {}, band_ {};
     FilterType type_ { FilterType::LowPass };
     bool steep_ { true }, fresh_ { true };
-    double resonance_ { -1.0 };
-    double g_ { 0.01 }, gTarget_ { 0.01 }, step_ { 0.0 };
-    double k1_ { 1.848 }, k2_ { 0.765 }, inputGain_ { 1.0 }, outputGain_ { 1.0 };
+    double f_ { 0.01 }, target_ { 0.01 }, step_ { 0.0 }, q_ { 1.0 }, gain_ { 1.0 };
     int left_ { 0 };
 };
 } // namespace hypra

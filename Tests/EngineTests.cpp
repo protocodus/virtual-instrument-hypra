@@ -142,27 +142,44 @@ void hardwareRecording()
     near (10.0 * std::log10 (first / tenth), -0.83, 0.35, "measured high-pass at the fundamental");
 }
 
-void sawShape()
+// Laws measured on JE-8086 2.2.27 running JP-8000 system 1.05, played as a
+// black box (Docs/research/black-box-je8086-2026-11-22.md).
+void measuredLaws()
 {
-    // SHAPE 0. Two recordings, the JP-8000 note (Freesound 275439) and factory
-    // patch A33 (SynthMania), give the saw's harmonics as (1 + K / n^2) / n
-    // with K = 1.24 to 1.27, in phase with the saw.
+    near (mapping::pulseDuty (64.0 / 127.0), 0.75, 1e-9, "pulse duty is 0.5 + v/256");
+    near (mapping::pulseDuty (8.0 / 127.0), 0.53125, 1e-9, "pulse duty at 8");
+    near (mapping::sawShapeK (0.0), 1.267, 1e-9, "saw SHAPE 0");
+    near (mapping::sawShapeK (32.0 / 127.0), 0.0, 0.006, "saw SHAPE 32 is a plain saw");
+    near (mapping::sawShapeK (1.0), -3.523, 1e-9, "saw SHAPE 127");
+    near (mapping::triangleModGain (0.0), 2.015, 1e-9, "triangle mod gain at 0");
+    near (mapping::triangleModGain (64.0 / 127.0), 1.6175, 1e-9, "triangle mod gain at 64");
+    near (mapping::triangleModGain (1.0), 1.375, 1e-9, "triangle mod gain at 127");
+    near (mapping::cutoffCoefficient (mapping::cutoffOctaves (64)), 0.039016, 1e-6, "cutoff 64");
+    near (mapping::cutoffCoefficient (mapping::cutoffOctaves (96)) / 0.2498, 1.0, 0.015, "cutoff 96");
+    near (mapping::cutoffCoefficient (mapping::cutoffOctaves (127)), 1.0, 1e-9, "cutoff 127 is fully open");
+    near (mapping::resonanceQ (0.0), 0.993, 1e-9, "resonance 0");
+    near (mapping::resonanceQ (64.0 / 127.0), 0.287, 1e-9, "resonance 64");
+
+    // One measured harmonic set: SHAPE 0 at C3 gave n x amplitude of
+    // 2.267, 1.330, 1.151 for the first three harmonics.
     std::vector<double> x (88200);
     for (std::size_t i = 0; i < x.size(); ++i)
         x[i] = osc::shapedSaw (std::fmod (i * 100.0 / kEngineRate, 1.0), 0.0);
-    const double h10 = 10.0 * tone (x, 1000.0);
-    for (int n = 1; n <= 4; ++n)
-        near (n * tone (x, 100.0 * n) / h10, 1.0 + 1.25 / (n * n), 0.04, "SHAPE 0 harmonic " + std::to_string (n));
+    const double h30 = 30.0 * tone (x, 3000.0);
+    const double measured[] { 2.267, 1.330, 1.151 };
+    for (int n = 1; n <= 3; ++n)
+        near (n * tone (x, 100.0 * n) / h30, measured[n - 1], 0.02, "SHAPE 0 harmonic " + std::to_string (n));
 }
 
 void filter()
 {
-    const auto gain = [] (FilterType type, bool steep, double hz)
+    const double f1k = 2.0 * std::sin (kPi * 1000.0 / fs);
+    const auto gain = [f1k] (FilterType type, bool steep, double hz, double resonance = 0.0)
     {
         Filter f;
-        f.configure (1000.0, 0.0, type, steep);
+        f.configure (f1k, resonance, type, steep);
         std::vector<double> x (44100);
-        for (int i = -8820; i < 44100; ++i)
+        for (int i = -88200; i < 44100; ++i)
         {
             const double y = f.process (1e-3 * std::sin (kTwoPi * hz * i / fs));
             if (i >= 0)
@@ -177,20 +194,30 @@ void filter()
     near (db (gain (FilterType::HighPass, true, 125) / gain (FilterType::HighPass, true, 250)), -24.0, 1.5, "HP24");
     check (gain (FilterType::BandPass, true, 1000) > 4.0 * gain (FilterType::BandPass, true, 4000), "BP passes cutoff");
 
+    // Measured: the -24 dB passband falls by the damping q as resonance
+    // rises (-10.8 dB at 64), the -12 dB passband only above 64 (-3.0 dB at 96).
+    near (db (gain (FilterType::LowPass, true, 50, 64.0 / 127.0)), -10.8, 0.4, "LP24 passband at resonance 64");
+    near (db (gain (FilterType::LowPass, false, 50, 64.0 / 127.0)), 0.0, 0.2, "LP12 passband at resonance 64");
+    near (db (gain (FilterType::LowPass, false, 50, 96.0 / 127.0)), -3.0, 0.3, "LP12 passband at resonance 96");
+    near (db (gain (FilterType::LowPass, false, 1000, 96.0 / 127.0) / gain (FilterType::LowPass, false, 50, 96.0 / 127.0)),
+          db (1.0 / 0.0748), 0.6, "LP12 peak at resonance 96");
+
     for (const bool steep : { false, true })
     {
-        // OM p.60: fully raised resonance oscillates.
+        // OM p.60 calls full resonance oscillation. Measured, it is a ring
+        // that lasts hundreds of cycles, not a sustained oscillator.
         Filter f;
-        f.configure (1000.0, 1.0, FilterType::LowPass, steep);
+        f.configure (f1k, 1.0, FilterType::LowPass, steep);
         f.process (0.5);
-        std::vector<double> x (44100);
-        for (int i = 0; i < 88200 * 2; ++i)
+        std::vector<double> x (8820);
+        for (int i = 0; i < 8820; ++i)
             f.process (0.0);
         for (auto& v : x)
             v = f.process (0.0);
-        check (tone (x, peakHz (x, 950, 1050, 2)) > 0.02, "self-oscillation is sustained");
-        near (peakHz (x, 950, 1050, 2), 1000.0, 10.0, "self-oscillation tracks cutoff");
-        check (*std::max_element (x.begin(), x.end()) < 4.0, "self-oscillation is bounded");
+        const double hz = peakHz (x, 950, 1050, 2);
+        check (tone (x, hz) > 1.0e-4, "full resonance still rings after 100 cycles");
+        near (hz, 1000.0, 10.0, "the ring tracks cutoff");
+        check (*std::max_element (x.begin(), x.end()) < 4.0, "the ring is bounded");
     }
 }
 
@@ -446,7 +473,7 @@ void operator delete (void* p, std::size_t) noexcept { std::free (p); }
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
-        { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "SawShape", sawShape }, { "Filter", filter }, { "Circuit", circuit },
+        { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)

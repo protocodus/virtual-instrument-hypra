@@ -34,7 +34,8 @@
 
 namespace hypra
 {
-enum class OutputNode : std::uint8_t { Rack, KeyboardAsPrinted };
+// Digital is the DAC word itself, for comparing with an emulator's output.
+enum class OutputNode : std::uint8_t { Rack, KeyboardAsPrinted, Digital };
 
 class AnalogOutput
 {
@@ -78,6 +79,8 @@ public:
     Stereo process (Stereo word) noexcept
     {
         Stereo x { convert (word.l), convert (word.r) };
+        if (node_ == OutputNode::Digital)
+            return x;
         for (std::size_t i = 0; i < couplingX_.size(); ++i)
         {
             const Stereo y = couplingGain_ * (x - couplingX_[i]) + couplingPole_ * couplingY_[i];

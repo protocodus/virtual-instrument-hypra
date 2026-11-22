@@ -11,6 +11,8 @@ Rack Extension will be a thin adapter over it.
 - Original code only. Do not read or copy Roland firmware, disassemblies, or
   emulators and write-ups that reproduce firmware code or tables. Manuals,
   service notes, recordings and black-box measurements are the evidence.
+  JE-8086 may be played and measured as an instrument (owner, 2026-11-22);
+  its source, its technical page and the 39C3 talk stay unread.
 - Tag every constant `[settled]`, `[measured]` or `[inferred]` beside the
   code that uses it, and keep `Docs/research/hardware-model-2026-11-22.md`
   in step.
