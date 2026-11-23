@@ -37,14 +37,15 @@ def compare():
     def bands(x):
         y=x.mean(0)[int((0.05+LAT+0.4)*SR):int((0.05+LAT+1.9)*SR)];n=8192;w=np.hanning(n);S=np.mean([np.abs(np.fft.rfft(y[i:i+n]*w))**2 for i in range(0,len(y)-n,n//2)],0);f=np.fft.rfftfreq(n,1/SR)
         return np.array([10*np.log10(S[(f>=a/2**0.25)&(f<a*2**0.25)].sum()+1e-20) for a in B])
-    print('band (Hz)        ',' '.join(f'{int(b):5d}' for b in B[::2]))
+    S=slice(None) if os.environ.get('FULL') else slice(None,None,2)
+    print('band (Hz)        ',' '.join(f'{int(b):5d}' for b in B[S]))
     for label,params in d.items():
         a=np.load(f'{OUT}/v_{label}.npy').astype(float)
         ev=['0 node digital']+m.events(params)+[f'0.05 note {NOTE} 100',f'2.05 off {NOTE}']
         open(f'{OUT}/ev.txt','w').write('\n'.join(ev)+'\n');subprocess.run([H,f'{OUT}/ev.txt',f'{OUT}/o.f32',str(SR),'2.6','stereo'],check=True)
         b=np.fromfile(f'{OUT}/o.f32','<f4').astype(float).reshape(-1,2).T;b=np.concatenate([np.zeros((2,int(LAT*SR))),b],1)
         ba=bands(a);bb=bands(b)
-        print(f'{label:16s} emu ',' '.join(f'{x:5.0f}' for x in ba[::2]));print(f'{"":16s} ours',' '.join(f'{x:5.0f}' for x in bb[::2]))
+        print(f'{label:16s} emu ',' '.join(f'{x:5.0f}' for x in ba[S]));print(f'{"":16s} ours',' '.join(f'{x:5.0f}' for x in bb[S]))
 if __name__=='__main__':
     os.makedirs(OUT,exist_ok=True)
     if os.environ.get('COMPARE'):compare()

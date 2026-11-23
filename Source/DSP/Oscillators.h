@@ -237,6 +237,13 @@ private:
 class NoiseOsc
 {
 public:
+    // [measured] JE-8086 black box, 2026-11-23 (Tools/blackbox/variants.py on
+    // program 63): with the main filter open, CTRL 1 from 40 to 127 and CTRL 2
+    // from 0 to 101, the noise oscillator alone plays 6-7 dB under what this
+    // stage gave, with the same spectral shape. At CTRL 2 127 JE-8086 is still
+    // 6-7 dB louder than this (open: its headroom at full resonance).
+    static constexpr double kNoiseGain = 0.473;
+
     void reset() noexcept
     {
         low1_ = band1_ = low2_ = band2_ = 0.0;
@@ -273,7 +280,7 @@ public:
         const double h2 = sat (x2 - sat (low2_ + q * band2_));
         band2_ = sat (band2_ + f_ * h2);
 
-        return sat (low2_ * 2.0 * sat (sat (4.75 * qHalf_) + (2949.0 / 16384.0))) * 0.46875;
+        return sat (low2_ * 2.0 * kNoiseGain * sat (sat (4.75 * qHalf_) + (2949.0 / 16384.0))) * 0.46875;
     }
 
 private:
