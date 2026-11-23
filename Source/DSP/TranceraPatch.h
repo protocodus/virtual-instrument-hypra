@@ -71,6 +71,21 @@ struct EffectParams
     int delayTime { 64 }, feedback { 40 }, delay { 0 };
 };
 
+// JP-8080 velocity matrix (VELOCITY on plus a depth per destination, -127 to
+// 127): each destination takes depth x g(velocity) in its own units, g from -1
+// at velocity 0 through about -0.2 at 64 to +1 at 127 (mapping::velocityMatrixScale).
+struct VelocityMatrix
+{
+    bool on { false };
+    int lfo1Rate { 0 }, lfo1Fade { 0 }, lfo2Rate { 0 }, xmod { 0 }, balance { 0 };
+    int pitchLfo { 0 }, pitchLfo2 { 0 }, pitchEnvDepth { 0 }, pitchAttack { 0 }, pitchDecay { 0 };
+    int osc1Ctrl1 { 0 }, osc1Ctrl2 { 0 }, osc2Range { 0 }, osc2Fine { 0 }, osc2Ctrl1 { 0 }, osc2Ctrl2 { 0 };
+    int cutoff { 0 }, resonance { 0 }, keyFollow { 0 }, filterLfo { 0 }, filterLfo2 { 0 };
+    int envDepth { 0 }, filterAttack { 0 }, filterDecay { 0 }, filterSustain { 0 }, filterRelease { 0 };
+    int level { 0 }, ampLfo { 0 }, ampLfo2 { 0 }, ampAttack { 0 }, ampDecay { 0 }, ampSustain { 0 }, ampRelease { 0 };
+    int bass { 0 }, treble { 0 }, multiFx { 0 }, delayTime { 0 }, delayFeedback { 0 }, delayLevel { 0 }, portamento { 0 };
+};
+
 struct Patch
 {
     Osc1Params osc1;
@@ -96,5 +111,10 @@ struct Patch
     // JP-8080 only: the JP-8000 has no unison switch.
     bool unison { false };
     int unisonDetune { 12 }; // cents
+    VelocityMatrix velocityMatrix;
 };
+
+// The patch as one voice plays it: the velocity matrix's offsets added at the
+// key's velocity (0-1), each clamped to its control's range.
+Patch withVelocity (const Patch& patch, double velocity) noexcept;
 } // namespace trancera

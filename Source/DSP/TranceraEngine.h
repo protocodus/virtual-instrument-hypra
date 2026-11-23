@@ -57,6 +57,7 @@ private:
         int fadePhase { 16384 };
         int qSnapTicks { 0 };
         double ampBase { 0.0 }, ampSmoothed { 0.0 };
+        Patch patch; // the part's patch at this voice's velocity (withVelocity)
     };
 
     struct HeldNote { int note { 0 }, velocity { 0 }; };

@@ -116,6 +116,61 @@ void Engine::setMode (KeyMode mode) noexcept
         s.keyCount = 0;
 }
 
+Patch withVelocity (const Patch& patch, double velocity) noexcept
+{
+    const VelocityMatrix& m = patch.velocityMatrix;
+    if (! m.on)
+        return patch;
+    Patch p = patch;
+    const double g = mapping::velocityMatrixScale (static_cast<int> (std::lround (velocity * 127.0)));
+    const auto add = [g] (int& value, int depth, int lo, int hi)
+    {
+        if (depth != 0)
+            value = std::clamp (value + static_cast<int> (std::lround (depth * g)), lo, hi);
+    };
+    add (p.lfo1.rate, m.lfo1Rate, 0, 127);
+    add (p.lfo1.fade, m.lfo1Fade, 0, 127);
+    add (p.lfo2.rate, m.lfo2Rate, 0, 127);
+    add (p.xmod, m.xmod, 0, 127);
+    add (p.balance, m.balance, -64, 63);
+    add (p.pitchLfo, m.pitchLfo, -64, 63);
+    add (p.lfo2.pitch, m.pitchLfo2, -64, 63);
+    add (p.pitchEnvDepth, m.pitchEnvDepth, -64, 63);
+    add (p.pitchAttack, m.pitchAttack, 0, 127);
+    add (p.pitchDecay, m.pitchDecay, 0, 127);
+    add (p.osc1.ctrl1, m.osc1Ctrl1, 0, 127);
+    add (p.osc1.ctrl2, m.osc1Ctrl2, 0, 127);
+    add (p.osc2.range, m.osc2Range, -25, 25);
+    add (p.osc2.fine, m.osc2Fine, -50, 50);
+    add (p.osc2.pulseWidth, m.osc2Ctrl1, 0, 127);
+    add (p.osc2.pwmDepth, m.osc2Ctrl2, 0, 127);
+    add (p.filter.cutoff, m.cutoff, 0, 127);
+    add (p.filter.resonance, m.resonance, 0, 127);
+    add (p.filter.keyFollow, m.keyFollow, -64, 63);
+    add (p.filter.lfoDepth, m.filterLfo, -64, 63);
+    add (p.lfo2.filter, m.filterLfo2, -64, 63);
+    add (p.filter.envDepth, m.envDepth, -64, 63);
+    add (p.filter.env.attack, m.filterAttack, 0, 127);
+    add (p.filter.env.decay, m.filterDecay, 0, 127);
+    add (p.filter.env.sustain, m.filterSustain, 0, 127);
+    add (p.filter.env.release, m.filterRelease, 0, 127);
+    add (p.level, m.level, 0, 127);
+    add (p.ampLfo, m.ampLfo, -64, 63);
+    add (p.lfo2.amp, m.ampLfo2, -64, 63);
+    add (p.amp.attack, m.ampAttack, 0, 127);
+    add (p.amp.decay, m.ampDecay, 0, 127);
+    add (p.amp.sustain, m.ampSustain, 0, 127);
+    add (p.amp.release, m.ampRelease, 0, 127);
+    add (p.effects.bass, m.bass, -64, 63);
+    add (p.effects.treble, m.treble, -64, 63);
+    add (p.effects.chorus, m.multiFx, 0, 127);
+    add (p.effects.delayTime, m.delayTime, 0, 127);
+    add (p.effects.feedback, m.delayFeedback, 0, 127);
+    add (p.effects.delay, m.delayLevel, 0, 127);
+    add (p.portamentoTime, m.portamento, 0, 127);
+    return p;
+}
+
 void Engine::setPatch (Part which, const Patch& patch) noexcept
 {
     const int part = static_cast<int> (which);
@@ -154,11 +209,12 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
     for (int i = range.first; i < range.first + range.count; ++i)
     {
         Voice& v = voices_[static_cast<std::size_t> (i)];
-        v.ampEnv.configure (patch.amp.attack, patch.amp.decay,
-                            mapping::ampSustain (patch.amp.sustain), patch.amp.release);
-        v.filterEnv.configure (patch.filter.env.attack, patch.filter.env.decay,
-                               mapping::filterSustain (patch.filter.env.sustain), patch.filter.env.release);
-        v.pitchEnv.configure (patch.pitchAttack, patch.pitchDecay, 0.0, patch.pitchDecay);
+        v.patch = withVelocity (patch, v.velocity);
+        const Patch& vp = v.patch;
+        v.ampEnv.configure (vp.amp.attack, vp.amp.decay, mapping::ampSustain (vp.amp.sustain), vp.amp.release);
+        v.filterEnv.configure (vp.filter.env.attack, vp.filter.env.decay,
+                               mapping::filterSustain (vp.filter.env.sustain), vp.filter.env.release);
+        v.pitchEnv.configure (vp.pitchAttack, vp.pitchDecay, 0.0, vp.pitchDecay);
         if (becameMono && i - range.first >= (unison (patch) ? range.count : 1))
             release (v);
     }
@@ -175,9 +231,21 @@ void Engine::release (Voice& v) noexcept
 void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger, bool mayGlide) noexcept
 {
     PartState& s = parts_[static_cast<std::size_t> (part)];
-    const Patch& p = s.patch;
     const bool fresh = ! v.active;
     const bool start = fresh || retrigger;
+    if (start)
+    {
+        v.patch = withVelocity (s.patch, velocity / 127.0);
+        if (s.patch.velocityMatrix.on)
+        {
+            const EffectParams& fx = v.patch.effects;
+            s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay);
+            s.chorus.configure (fx.chorusType, fx.chorus);
+            s.lfoStep = mapping::lfoHz (v.patch.lfo1.rate) / kEnvelopeRate;
+            s.lfo2Step = mapping::lfo2Hz (v.patch.lfo2.rate) / kEnvelopeRate;
+        }
+    }
+    const Patch& p = v.patch;
     v.note = note;
     v.order = ++order_;
     v.held = true;
@@ -372,7 +440,7 @@ int Engine::activeVoices() const noexcept
 void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
 {
     const PartState& s = parts_[static_cast<std::size_t> (part)];
-    const Patch& p = s.patch;
+    const Patch& p = v.patch;
     if (advanceTick)
     {
         if (v.portaRemain > 0)

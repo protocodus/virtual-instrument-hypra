@@ -37,7 +37,47 @@ bool set (Patch& p, const std::string& name, int v)
         { "xmod", &p.xmod }, { "amplfo", &p.ampLfo }, { "chorus", &p.effects.chorus },
         { "delay.time", &p.effects.delayTime }, { "delay.feedback", &p.effects.feedback }, { "delay", &p.effects.delay },
         { "osc2.fine", &p.osc2.fine }, { "osc2.pw", &p.osc2.pulseWidth }, { "osc2.pwm", &p.osc2.pwmDepth },
-        { "oscshift", &p.oscShift }, { "unison.detune", &p.unisonDetune } };
+        { "oscshift", &p.oscShift }, { "unison.detune", &p.unisonDetune },
+        { "vel.lfo1Rate", &p.velocityMatrix.lfo1Rate },
+        { "vel.lfo1Fade", &p.velocityMatrix.lfo1Fade },
+        { "vel.lfo2Rate", &p.velocityMatrix.lfo2Rate },
+        { "vel.xmod", &p.velocityMatrix.xmod },
+        { "vel.balance", &p.velocityMatrix.balance },
+        { "vel.pitchLfo", &p.velocityMatrix.pitchLfo },
+        { "vel.pitchLfo2", &p.velocityMatrix.pitchLfo2 },
+        { "vel.pitchEnvDepth", &p.velocityMatrix.pitchEnvDepth },
+        { "vel.pitchAttack", &p.velocityMatrix.pitchAttack },
+        { "vel.pitchDecay", &p.velocityMatrix.pitchDecay },
+        { "vel.osc1Ctrl1", &p.velocityMatrix.osc1Ctrl1 },
+        { "vel.osc1Ctrl2", &p.velocityMatrix.osc1Ctrl2 },
+        { "vel.osc2Range", &p.velocityMatrix.osc2Range },
+        { "vel.osc2Fine", &p.velocityMatrix.osc2Fine },
+        { "vel.osc2Ctrl1", &p.velocityMatrix.osc2Ctrl1 },
+        { "vel.osc2Ctrl2", &p.velocityMatrix.osc2Ctrl2 },
+        { "vel.cutoff", &p.velocityMatrix.cutoff },
+        { "vel.resonance", &p.velocityMatrix.resonance },
+        { "vel.keyFollow", &p.velocityMatrix.keyFollow },
+        { "vel.filterLfo", &p.velocityMatrix.filterLfo },
+        { "vel.filterLfo2", &p.velocityMatrix.filterLfo2 },
+        { "vel.envDepth", &p.velocityMatrix.envDepth },
+        { "vel.filterAttack", &p.velocityMatrix.filterAttack },
+        { "vel.filterDecay", &p.velocityMatrix.filterDecay },
+        { "vel.filterSustain", &p.velocityMatrix.filterSustain },
+        { "vel.filterRelease", &p.velocityMatrix.filterRelease },
+        { "vel.level", &p.velocityMatrix.level },
+        { "vel.ampLfo", &p.velocityMatrix.ampLfo },
+        { "vel.ampLfo2", &p.velocityMatrix.ampLfo2 },
+        { "vel.ampAttack", &p.velocityMatrix.ampAttack },
+        { "vel.ampDecay", &p.velocityMatrix.ampDecay },
+        { "vel.ampSustain", &p.velocityMatrix.ampSustain },
+        { "vel.ampRelease", &p.velocityMatrix.ampRelease },
+        { "vel.bass", &p.velocityMatrix.bass },
+        { "vel.treble", &p.velocityMatrix.treble },
+        { "vel.multiFx", &p.velocityMatrix.multiFx },
+        { "vel.delayTime", &p.velocityMatrix.delayTime },
+        { "vel.delayFeedback", &p.velocityMatrix.delayFeedback },
+        { "vel.delayLevel", &p.velocityMatrix.delayLevel },
+        { "vel.portamento", &p.velocityMatrix.portamento } };
     if (const auto it = ints.find (name); it != ints.end())
         *it->second = v;
     else if (name == "osc1.wave")
@@ -70,6 +110,8 @@ bool set (Patch& p, const std::string& name, int v)
         p.unison = v != 0;
     else if (name == "ring")
         p.ring = v != 0;
+    else if (name == "vel.on")
+        p.velocityMatrix.on = v != 0;
     else
         return false;
     return true;

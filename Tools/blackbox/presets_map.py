@@ -20,8 +20,13 @@ MAP={
  'a_portamento':('portamento',E),'a_portamento_time':('portamento.time',U),'a_mono':('mono',E),'a_legato':('legato',E),
  'a_oscillator_shift':('oscshift',lambda i,n:i-2),'a_unison':('unison',E),
 }
-def events(params):
+VEL={'a_v_lfo1_rate':'vel.lfo1Rate','a_v_lfo1_fade':'vel.lfo1Fade','a_v_lfo2_rate':'vel.lfo2Rate','a_v_cross_mod_depth':'vel.xmod','a_v_osc_balance':'vel.balance','a_v_pitch_lfo1_depth':'vel.pitchLfo','a_v_pitch_lfo2_depth':'vel.pitchLfo2','a_v_pitchenv_depth':'vel.pitchEnvDepth','a_v_pitch_env_atk':'vel.pitchAttack','a_v_pitch_env_dcy':'vel.pitchDecay','a_v_osc1_control_1':'vel.osc1Ctrl1','a_v_osc1_control_2':'vel.osc1Ctrl2','a_v_osc2_range':'vel.osc2Range','a_v_osc2_fine_wide':'vel.osc2Fine','a_v_osc2_control_1':'vel.osc2Ctrl1','a_v_osc2_control_2':'vel.osc2Ctrl2','a_v_cutoff_freq':'vel.cutoff','a_v_flt_resonance':'vel.resonance','a_v_key_follow':'vel.keyFollow','a_v_flt_lfo1':'vel.filterLfo','a_v_flt_lfo2':'vel.filterLfo2','a_v_flt_env_dpth':'vel.envDepth','a_v_flt_env_attack':'vel.filterAttack','a_v_flt_env_decay':'vel.filterDecay','a_v_flt_env_sustain':'vel.filterSustain','a_v_flt_env_rel':'vel.filterRelease','a_v_amp_level':'vel.level','a_v_amp_lfo1_dpth':'vel.ampLfo','a_v_amp_lfo2_dpth':'vel.ampLfo2','a_v_amp_env_attack':'vel.ampAttack','a_v_amp_env_decay':'vel.ampDecay','a_v_amp_env_sustain':'vel.ampSustain','a_v_amp_env_rel':'vel.ampRelease','a_v_tone_ctrl_bass':'vel.bass','a_v_tone_ctrl_treble':'vel.treble','a_v_multifx_level':'vel.multiFx','a_v_delay_time':'vel.delayTime','a_v_delay_feedbk':'vel.delayFeedback','a_v_delay_level':'vel.delayLevel','a_v_portamento':'vel.portamento'}
+def events(params,matrix=False):
     ev=[]
+    if matrix and 'a_velocity' in params:
+        ev.append(f"0 set vel.on {1 if params['a_velocity'][2] in ('ON','True') else 0}")
+        for k,n in VEL.items():
+            if k in params:ev.append(f'0 set {n} {int(float(params[k][2]))}')
     for k,(name,f) in MAP.items():
         if k in params:
             i,n=params[k][0],params[k][1];ev.append(f'0 set {name} {f(i,n)}')

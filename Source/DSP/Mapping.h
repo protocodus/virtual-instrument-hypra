@@ -544,6 +544,16 @@ inline double filterSustain (int value) noexcept
     return unit (value);
 }
 
+// The velocity matrix's scale for a key: 2 x velocityCurve[v] - 1, from -1 to +1.
+// [measured] JE-8086 black box, 2026-11-23: a held saw with the AMP LEVEL depth
+// at -64, 64 and 127 moved AMP LEVEL by depth x -0.617, -0.20, +0.416, +1.0 at
+// velocity 32, 64, 100, 127; this table gives -0.618, -0.164, +0.452, +1.0.
+inline double velocityMatrixScale (int velocity) noexcept
+{
+    const auto idx = static_cast<std::size_t> (std::clamp (velocity, 0, 127));
+    return 2.0 * static_cast<double> (velocityCurve[idx]) / 32767.0 - 1.0;
+}
+
 inline double noiseCoefficient (double hz, double cutoff) noexcept
 {
     return std::clamp (kTwoPi * hz * std::exp2 ((std::clamp (cutoff, 0.0, 1.0) * 127.0 - 64.0) / 12.0) / kEngineRate,
