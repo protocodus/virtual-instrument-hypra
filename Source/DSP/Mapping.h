@@ -50,7 +50,35 @@ inline constexpr std::array<double, 17> detuneTable {
     0.0027, 0.00967268, 0.0220363, 0.0339636, 0.0467636, 0.0591273, 0.0714909, 0.0838545,
     0.0967273, 0.121527, 0.147127, 0.193455, 0.243418, 0.2933815, 0.343345, 0.3928, 1.0
 };
-inline double superDetune (double knob) noexcept { return detail::table (detuneTable, knob); }
+// [measured, black box] DETUNE at every value from 34 on JE-8086 (the
+// spread of the seven partials at the third harmonic of C5): it steps in
+// pairs from 34 to 61 and climbs steeply from 120 to 1.0 at 127, where
+// Szabo's points interpolate linearly (up to 47 % off at 124). Below 34 the
+// partials are too close to resolve, so Szabo's points stay.
+inline constexpr std::array<double, 128> detuneEveryValue {
+    0.0027, 0.0036961, 0.0046922, 0.0056883, 0.0066844, 0.0076805, 0.0086766, 0.0096727,
+    0.011218, 0.012764, 0.014309, 0.015854, 0.0174, 0.018945, 0.020491, 0.022036,
+    0.023527, 0.025018, 0.026509, 0.028, 0.029491, 0.030982, 0.032473, 0.033964,
+    0.035564, 0.037164, 0.038764, 0.040364, 0.041964, 0.043564, 0.045164, 0.046764,
+    0.048309, 0.049855, 0.053124, 0.053172, 0.055987, 0.056035, 0.059006, 0.059006,
+    0.062245, 0.062245, 0.065108, 0.065157, 0.06828, 0.06828, 0.07136, 0.07136,
+    0.074778, 0.074778, 0.077617, 0.077666, 0.080635, 0.080635, 0.083604, 0.083604,
+    0.086871, 0.086871, 0.090398, 0.090447, 0.093682, 0.093682, 0.09665, 0.09665,
+    0.09994, 0.10291, 0.10593, 0.10879, 0.11229, 0.11526, 0.11828, 0.1213,
+    0.12454, 0.12756, 0.13064, 0.13408, 0.13705, 0.1406, 0.14342, 0.14659,
+    0.1494, 0.15566, 0.16196, 0.16822, 0.17421, 0.18127, 0.18725, 0.19336,
+    0.19945, 0.20571, 0.2117, 0.21796, 0.22448, 0.23073, 0.23699, 0.24282,
+    0.24934, 0.2556, 0.26159, 0.26816, 0.27468, 0.28067, 0.28677, 0.29295,
+    0.29913, 0.30511, 0.31191, 0.31816, 0.32442, 0.3304, 0.33693, 0.34276,
+    0.34902, 0.35586, 0.36184, 0.3681, 0.37409, 0.38045, 0.38644, 0.39254,
+    0.39922, 0.42409, 0.44943, 0.47387, 0.52376, 0.5991, 0.6985, 1
+};
+inline double superDetune (double knob) noexcept
+{
+    const double at = std::clamp (knob, 0.0, 1.0) * 127.0;
+    const std::size_t i = std::min<std::size_t> (static_cast<std::size_t> (at), 126);
+    return detuneEveryValue[i] + (detuneEveryValue[i + 1] - detuneEveryValue[i]) * (at - static_cast<double> (i));
+}
 
 // [measured] Szabo Table 3: centre and side levels against MIX, same points.
 inline constexpr std::array<double, 17> centreTable {
@@ -66,10 +94,25 @@ inline double superSide (double mix) noexcept { return detail::table (sideTable,
 inline constexpr double superHighPassRatio = 0.904;
 inline constexpr double superHighPassQ = 0.878;
 
-// [measured, two notes of factory performance P14] the feedback loop runs
-// this many samples short of one period, so its howl beats against the
-// harmonic it sits beside.
-inline constexpr double feedbackLoopShortfall = 2.5;
+// [measured, black box] On JE-8086 the feedback howl sits exactly on a
+// harmonic of the note (within 0.1 %), so the loop is one period long. A
+// factory-performance recording (P14) had suggested 2.5 samples short; that
+// file is wet and the emulator wins.
+inline constexpr double feedbackLoopShortfall = 0.0;
+
+// [measured, black box] The harmonic the howl picks for HARMONICS (OSC 1
+// CTRL 1) at 0, 4 ... 124, AMOUNT 64, C3; it is the same on every key from
+// F#2 to C6 at 64. It jumps about rather than climbing; values between the
+// points take the nearest one.
+inline constexpr std::array<int, 32> feedbackHarmonicTable {
+    2, 2, 2, 2, 16, 7, 32, 41, 8, 14, 35, 3, 3, 27, 25, 19,
+    4, 13, 23, 10, 16, 6, 13, 7, 8, 28, 11, 13, 17, 23, 2, 2
+};
+inline int feedbackHarmonic (double harmonics) noexcept
+{
+    const int i = static_cast<int> (std::lround (std::clamp (harmonics, 0.0, 1.0) * 127.0 / 4.0));
+    return feedbackHarmonicTable[static_cast<std::size_t> (std::min (i, 31))];
+}
 
 // The laws below marked [measured, black box] come from JE-8086 2.2.27
 // running JP-8000 system 1.05, played over MIDI and analysed from its output

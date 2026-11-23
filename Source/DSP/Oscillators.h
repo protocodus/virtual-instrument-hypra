@@ -143,8 +143,9 @@ public:
             else
                 sides += saw;
         }
-        // [inferred] level, chosen so eight voices at full MIX stay under full scale.
-        return 0.58 * highPass2_.process (highPass_.process (centre_ * centre + side_ * sides).high).high;
+        // [measured, black box] Level against the saw: 1.4 dB under the old
+        // 0.58 across MIX 0-127 (JE-8086, every Szabo point).
+        return 0.494 * highPass2_.process (highPass_.process (centre_ * centre + side_ * sides).high).high;
     }
 
     bool wrapped() const noexcept { return wrapped_; }
@@ -220,11 +221,13 @@ public:
             delay_ = target_;
         // The band-pass sits on the loop's own mode, so it picks the mode
         // without pulling the howl back onto the note's harmonic.
-        const double mode = std::round (1.0 + 7.0 * harmonics) * kEngineRate / target_;
+        const double mode = mapping::feedbackHarmonic (harmonics) * kEngineRate / target_;
         band_.configure (std::clamp (mode, 10.0, 18000.0), damping);
         bloom_ += onePole (0.8, kControlRate) * (1.0 - bloom_);
         amount_ = amount;
-        loopGain_ = 1.8 * amount * (0.45 + 0.55 * bloom_);
+        // [measured, black box] JE-8086 howls from AMOUNT 16 and is near full
+        // strength by 48 (the howl is within 1 dB of AMOUNT 127 from 56).
+        loopGain_ = 1.8 * std::min (1.0, 2.6 * amount) * (0.45 + 0.55 * bloom_);
     }
 
     double process (double saw) noexcept
@@ -239,7 +242,7 @@ public:
         const double loop = softClip (0.015 * amount_ * saw + loopGain_ * fed);
         buffer_[static_cast<std::size_t> (write_)] = static_cast<float> (loop);
         write_ = (write_ + 1) & mask;
-        return saw * (0.8 - 0.62 * amount_) + 0.95 * amount_ * loop;
+        return saw * (0.8 - 0.62 * amount_) + 0.95 * std::min (1.0, 1.9 * amount_) * loop;
     }
 
 private:
@@ -346,7 +349,7 @@ public:
             case Wave2::Triangle: second = osc::triangle (p2); last2_ = second; second *= 1.28; break;
         }
         if (c_.ring)
-            second *= 1.6 * first;
+            second *= 1.06 * first; // [measured] level of the JE-8086 ring (tri and saw)
         return c_.gain1 * first + c_.gain2 * second;
     }
 

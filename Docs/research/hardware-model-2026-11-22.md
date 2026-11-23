@@ -83,7 +83,7 @@ at 34 and 73 kHz.
 | --- | --- | --- |
 | Triangle SHAPE above 0 | a cusp, then a fold; captured but not yet modelled | a model that fits the captures |
 | Supersaw high-pass tracking | the same ratio and Q on every key and detune | a second recorded note |
-| Feedback oscillator | limited loop with a mode-selecting band-pass, its gains and bloom | dry recordings at several settings |
+| Feedback oscillator above the harmonic | a band-passed howl; JE-8086 adds a square's odd harmonics | a model of the loop's limiter |
 | Sync | reset on the sample | spectrum at high ratios |
 | Release and decay below 10 | the fast part only, not the tail | finer captures |
 | Velocity matrix, ring modulation, LFO to X-MOD | old guesses | black-box sweeps |

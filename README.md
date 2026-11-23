@@ -6,16 +6,16 @@ once its sound is approved. "Hypra" is a working name. It is an independent
 original implementation, not affiliated with or licensed by Roland, and holds
 no firmware, ROM data, samples, captured audio or factory patch data.
 
-**Status: 0.4.1, for listening.** The engine is complete enough to judge the
+**Status: 0.5.0, for listening.** The engine is complete enough to judge the
 sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
 mode or motion control. The saw, pulse and triangle-mod waveforms and the
 filter are fitted to an emulator running the JP-8000's own system software,
 played as a black box, and agree with it within 0.2 dB. So are the
 envelopes, both LFOs, FADE, the modulation depths, pan, OSC BALANCE, key
-follow, portamento, cross mod and the noise oscillator (1-1.5 % median
-gaps). The supersaw is fitted to a recording of a JP-8080. The triangle's
-SHAPE, the feedback oscillator, ring modulation, the velocity matrix and
-the effects are still estimates.
+follow, portamento, cross mod, ring modulation, the feedback oscillator,
+the noise oscillator and the supersaw's Detune at every value (1-1.5 %
+median gaps). The triangle's SHAPE above 0, the velocity matrix and the
+effects are still estimates.
 
 ![Front-panel draft](Docs/screenshots/front-panel-draft-2x.png)
 
@@ -67,6 +67,7 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.5.0 | Supersaw Detune follows JE-8086 at every value (steps from 34, a steep climb from 120) and its level drops 1.4 dB; ring modulation 3.6 dB quieter; the feedback oscillator howls exactly on the harmonic JE-8086 picks for each HARMONICS setting, from the same AMOUNT. |
 | 0.4.1 | Oscillator SHAPE defaults to 0, as on JE-8086 (it was 64, a brighter wave), and the demo saws use SHAPE 0, the rounder saw of the factory patches, instead of the plain saw at 32. |
 | 0.4.0 | Envelope segments start late (25 ms from 30), short attacks are faster, FADE ramps in decibels, LFO 2 has its own rate, amp LFO, pan, OSC BALANCE (constant power), X-MOD (FM in Hz) and the noise oscillator (the main filter on the key) follow JE-8086. Velocity is off by default, as there. |
 | 0.3.0 | Envelopes, LFO 1 rate and depths, pitch and filter envelope depths, key follow and portamento follow black-box measurements of JE-8086: one exponential time constant per value for attack, decay and release, a glide of fixed time, key follow at half strength below zero. The demo patches keep their old timing under the new tables. |

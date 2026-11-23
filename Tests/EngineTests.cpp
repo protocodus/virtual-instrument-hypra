@@ -94,11 +94,12 @@ void superSaw()
     near (mapping::superSide (0.0), 0.03836, 1e-9, "side gain at mix 0");
     near (mapping::superCentre (95.0 / 127.0), 0.585, 1e-9, "centre gain at mix 95");
     near (mapping::superSide (1.0), 0.59, 1e-9, "side gain at mix 127");
-    near (mapping::superDetune (63.0 / 127.0), 0.0967273, 1e-9, "detune at 63");
+    near (mapping::superDetune (63.0 / 127.0), 0.0967273, 2e-4, "detune at 63 (Szabo; JE-8086 within 0.1 %)");
+    near (mapping::superDetune (124.0 / 127.0), 0.52376, 1e-5, "detune climbs steeply from 120 (JE-8086)");
     near (mapping::superDetune (1.0), 1.0, 1e-9, "detune at 127");
     bool rising = true;
     for (int v = 1; v < 128; ++v)
-        rising = rising && mapping::superDetune (v / 127.0) > mapping::superDetune ((v - 1) / 127.0);
+        rising = rising && mapping::superDetune (v / 127.0) >= mapping::superDetune ((v - 1) / 127.0);
     check (rising, "detune never turns back");
 
     // Pitch-tracked high-pass: what aliases below f0 is well under the fundamental.
@@ -357,12 +358,9 @@ void feedback()
         x.erase (x.begin(), x.begin() + 96000);
         return x;
     };
-    // SynthMania's recording of factory performance P14 holds a howl at
-    // 3.054 x B4 and another at 4.031 x E4: a harmonic of a loop 2 to 3
-    // samples shorter than the period, not the harmonic itself.
-    // Docs/research/hardware-ab-2026-11-22.md.
-    double previous = 0.0;
-    for (const int harmonics : { 18, 64, 110 })
+    // JE-8086 at AMOUNT 127: HARMONICS 0 howls on the 2nd harmonic, 32 on
+    // the 8th, 64 on the 4th, exactly (Docs/research/black-box-je8086-2026-11-22.md).
+    for (const auto& [harmonics, expected] : { std::pair { 0, 2 }, std::pair { 32, 8 }, std::pair { 64, 4 } })
     {
         const auto x = howl (harmonics, 127);
         double best = 0.0, level = 0.0;
@@ -375,12 +373,8 @@ void feedback()
                 best = hz;
             }
         }
-        const double n = best / 220.0, period = kEngineRate / 220.0;
-        const double expected = std::round (n) * period / (period - mapping::feedbackLoopShortfall);
-        near (n, expected, 0.012, "howl sits on a harmonic of the short loop");
-        check (n > previous + 0.5, "HARMONICS raises the howling harmonic");
+        near (best / 220.0, expected, 0.01, "howl on harmonic " + std::to_string (expected));
         check (db (level / tone (x, 220.0, 48000)) > 6.0, "howl stands over the fundamental");
-        previous = n;
     }
 }
 
