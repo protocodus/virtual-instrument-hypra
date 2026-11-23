@@ -6,13 +6,15 @@ once its sound is approved. "Hypra" is a working name. It is an independent
 original implementation, not affiliated with or licensed by Roland, and holds
 no firmware, ROM data, samples, captured audio or factory patch data.
 
-**Status: 0.2.0, for listening.** The engine is complete enough to judge the
+**Status: 0.3.0, for listening.** The engine is complete enough to judge the
 sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
 mode or motion control. The saw, pulse and triangle-mod waveforms and the
 filter are fitted to an emulator running the JP-8000's own system software,
-played as a black box, and agree with it within 0.2 dB. The supersaw is
-fitted to a recording of a JP-8080. Envelopes, LFOs, the triangle's SHAPE,
-the feedback oscillator and the effects are still estimates.
+played as a black box, and agree with it within 0.2 dB. So are the
+envelope times, LFO 1 rate and depths, the pitch and filter envelope
+depths, key follow and portamento (1 % median gap). The supersaw is fitted
+to a recording of a JP-8080. The triangle's SHAPE, noise, the feedback
+oscillator, cross mod, LFO 2, FADE and the effects are still estimates.
 
 ![Front-panel draft](Docs/screenshots/front-panel-draft-2x.png)
 
@@ -64,6 +66,7 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.3.0 | Envelopes, LFO 1 rate and depths, pitch and filter envelope depths, key follow and portamento follow black-box measurements of JE-8086: one exponential time constant per value for attack, decay and release, a glide of fixed time, key follow at half strength below zero. The demo patches keep their old timing under the new tables. |
 | 0.2.0 | The filter, saw SHAPE, pulse width and triangle mod follow black-box measurements of JE-8086: a different filter structure, cutoff a semitone per step, a measured resonance curve, -24 dB as two identical stages. |
 | 0.1.3 | Detune and Mix follow Szabo's measured tables instead of his fitted curves: the sides are 14 % quieter at Mix 0. |
 | 0.1.2 | The saw's round end and the feedback howl's tuning follow factory-patch recordings. |

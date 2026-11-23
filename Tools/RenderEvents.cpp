@@ -29,7 +29,9 @@ bool set (Patch& p, const std::string& name, int v)
         { "amp.a", &p.amp.attack }, { "amp.d", &p.amp.decay }, { "amp.s", &p.amp.sustain },
         { "amp.r", &p.amp.release }, { "level", &p.level }, { "velocityamp", &p.velocityAmp },
         { "bass", &p.effects.bass }, { "treble", &p.effects.treble }, { "osc2.range", &p.osc2.range },
-        { "pitchlfo", &p.pitchLfo }, { "lfo1.rate", &p.lfo1.rate } };
+        { "pitchlfo", &p.pitchLfo }, { "lfo1.rate", &p.lfo1.rate }, { "filterlfo", &p.filter.lfoDepth },
+        { "pitchenv", &p.pitchEnvDepth }, { "pitchenv.a", &p.pitchAttack }, { "pitchenv.d", &p.pitchDecay },
+        { "portamento.time", &p.portamentoTime } };
     if (const auto it = ints.find (name); it != ints.end())
         *it->second = v;
     else if (name == "osc1.wave")
@@ -42,6 +44,8 @@ bool set (Patch& p, const std::string& name, int v)
         p.mono = v != 0;
     else if (name == "legato")
         p.legato = v != 0;
+    else if (name == "portamento")
+        p.portamento = v != 0;
     else
         return false;
     return true;

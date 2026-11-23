@@ -457,6 +457,89 @@ void stability()
     }
     check (finite, "random patches stay finite and bounded");
 }
+// Timing and modulation laws from the second black-box round on JE-8086
+// (Docs/research/black-box-je8086-2026-11-22.md, "Round 2").
+double zeroCrossingHz (const std::vector<double>& x, std::size_t from, std::size_t to, double rate)
+{
+    double first = -1.0, last = 0.0;
+    int count = 0;
+    for (std::size_t i = from + 1; i < to; ++i)
+        if (x[i - 1] < 0.0 && x[i] >= 0.0)
+        {
+            const double t = static_cast<double> (i - 1) + x[i - 1] / (x[i - 1] - x[i]);
+            if (first < 0.0)
+                first = t;
+            else
+                ++count;
+            last = t;
+        }
+    return count > 0 ? rate * count / (last - first) : 0.0;
+}
+
+void timing()
+{
+    near (mapping::envelopeSeconds60 (64), 2.176, 1e-3, "decay and release 64 fall 60 dB in 2.18 s");
+    near (mapping::envelopeSeconds60 (16), 0.1355, 1e-4, "envelope 16");
+    near (mapping::envelopeSeconds60 (112), 18.2, 0.01, "envelope 112");
+    near (mapping::envelopeSeconds60 (120), 57.58, 0.01, "envelope 120, past the step at 117");
+    near (mapping::envelopeSeconds60 (127), 100.9, 0.01, "envelope 127");
+    near (mapping::lfoHz (0), 0.0499, 1e-4, "LFO 1 rate 0");
+    near (mapping::lfoHz (64), 3.225, 1e-3, "LFO 1 rate 64");
+    near (mapping::lfoHz (66), std::sqrt (3.225 * 3.674), 1e-3, "LFO rate between points is geometric");
+    near (mapping::lfoHz (127), 50.04, 0.01, "LFO 1 rate 127");
+    near (mapping::pitchEnvSemitones (32), 14.57, 1e-3, "pitch env depth +32");
+    near (mapping::pitchEnvSemitones (-64), -48.324, 1e-3, "pitch env depth -64 is four octaves down");
+    near (mapping::pitchLfoSemitones (32), 7.285, 1e-3, "pitch LFO depth is half the envelope's");
+    near (mapping::filterEnvSemitones (32), 36.13, 1e-3, "filter env depth +32");
+    near (mapping::filterEnvSemitones (-48), -75.98, 1e-3, "filter env depth is symmetric");
+    near (mapping::filterLfoSemitones (40), 27.39, 1e-3, "filter LFO depth is half the envelope's");
+    near (mapping::keyFollow (-64), -1.0, 1e-9, "key follow -64 is -100 %");
+    near (mapping::keyFollow (32), 1.0, 1e-9, "key follow +32 is 100 %");
+    near (mapping::portamentoSeconds (64), 0.316, 1e-3, "portamento 64");
+    near (mapping::portamentoSeconds (0), 0.0, 1e-9, "portamento 0 jumps");
+
+    // Attack rises toward 1.2525 with the decay's time constant and stops at
+    // 1, so it takes ln 4.96 time constants; 64 reaches half in 0.161 s.
+    Envelope env;
+    const double tau = mapping::envelopeSeconds60 (64) / 6.907755;
+    env.configure (tau, tau, 0.0, tau);
+    env.trigger();
+    int half = -1, full = -1;
+    for (int i = 0; i < static_cast<int> (fs); ++i)
+    {
+        const double v = env.process();
+        if (half < 0 && v >= 0.5)
+            half = i;
+        if (full < 0 && v >= 0.999)
+            full = i;
+    }
+    near (half / fs, 0.509 * tau, 0.002, "attack 64 reaches half");
+    near (full / fs, 1.6014 * tau, 0.003, "attack 64 reaches the top");
+
+    // Portamento is a straight line in pitch that takes the same time for
+    // any interval: 48 to 72 at 64 passes 60 halfway through 0.316 s.
+    Patch p;
+    p.osc1.wave = Wave1::Triangle;
+    p.balance = -64;
+    p.mono = p.portamento = true;
+    p.portamentoTime = 64;
+    p.amp.sustain = 127;
+    Engine e;
+    e.prepare (fs);
+    e.setPatch (Part::Upper, p);
+    std::vector<float> l (static_cast<std::size_t> (fs)), r (l.size());
+    e.noteOn (48, 100);
+    e.render (l.data(), r.data(), 8820);
+    e.noteOn (72, 100);
+    e.render (l.data(), r.data(), static_cast<int> (l.size()));
+    const std::vector<double> x (l.begin(), l.end());
+    const auto at = [&] (double t) { return static_cast<std::size_t> (t * fs); };
+    const double mid = zeroCrossingHz (x, at (0.158 - 0.006), at (0.158 + 0.006), fs);
+    near (12.0 * std::log2 (mid / 261.6256), 0.0, 0.35, "glide passes C4 halfway");
+    const double end = zeroCrossingHz (x, at (0.4), at (0.6), fs);
+    near (12.0 * std::log2 (end / 523.2511), 0.0, 0.02, "glide lands on C5");
+}
+
 } // namespace
 
 void* operator new (std::size_t size)
@@ -474,7 +557,7 @@ int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
-        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability } };
+        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

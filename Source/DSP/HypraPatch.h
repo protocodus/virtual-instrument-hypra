@@ -38,7 +38,7 @@ struct Osc2Params
 
 struct EnvParams
 {
-    int attack { 0 }, decay { 64 }, sustain { 127 }, release { 20 };
+    int attack { 0 }, decay { 64 }, sustain { 127 }, release { 5 };
 };
 
 struct FilterParams
@@ -53,12 +53,12 @@ struct FilterParams
 struct Lfo1Params
 {
     LfoWave wave { LfoWave::Triangle };
-    int rate { 64 }, fade { 0 };
+    int rate { 48 }, fade { 0 };
 };
 
 struct Lfo2Params
 {
-    int rate { 80 };
+    int rate { 60 };
     int pitch { 8 }, filter { 0 }, amp { 0 }; // scaled by the modulation lever
 };
 
@@ -89,7 +89,7 @@ struct Patch
     Lfo2Params lfo2;
     EffectParams effects;
     bool mono { false }, legato { false }, portamento { false };
-    int portamentoTime { 30 };
+    int portamentoTime { 11 };
     int oscShift { 0 };
     int bendUp { 2 }, bendDown { 2 };
     int velocityAmp { 32 }, velocityFilter { 0 };

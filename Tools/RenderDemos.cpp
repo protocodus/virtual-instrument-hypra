@@ -192,7 +192,7 @@ Patch leadPatch()
     p.filter.cutoff = 118;
     p.filter.resonance = 14;
     p.filter.keyFollow = 10;
-    p.amp = { 8, 70, 108, 52 };
+    p.amp = { 2, 29, 108, 13 };
     p.level = 105;
     p.effects.chorusType = ChorusType::SuperSlow;
     p.effects.chorus = 38;
@@ -209,9 +209,9 @@ Patch padPatch()
     p.filter.cutoff = 86;
     p.filter.resonance = 18;
     p.filter.keyFollow = 12;
-    p.filter.lfoDepth = 5;
-    p.lfo1.rate = 25;
-    p.amp = { 78, 80, 115, 78 };
+    p.filter.lfoDepth = 15;
+    p.lfo1.rate = 19;
+    p.amp = { 42, 40, 115, 38 };
     p.level = 96;
     p.effects.chorusType = ChorusType::SuperMid;
     p.effects.chorus = 72;
@@ -226,9 +226,9 @@ Patch bassPatch()
     p.osc2.range = -12;
     p.filter.cutoff = 42;
     p.filter.resonance = 72;
-    p.filter.envDepth = 25;
-    p.filter.env = { 0, 48, 12, 30 };
-    p.amp = { 2, 60, 100, 24 };
+    p.filter.envDepth = 37;
+    p.filter.env = { 0, 10, 12, 9 };
+    p.amp = { 1, 20, 100, 7 };
     p.mono = true;
     return p;
 }
@@ -238,9 +238,9 @@ Patch pluckPatch()
     Patch p = superSaw (44, 80);
     p.filter.cutoff = 52;
     p.filter.resonance = 30;
-    p.filter.envDepth = 32;
-    p.filter.env = { 0, 52, 0, 40 };
-    p.amp = { 2, 66, 20, 44 };
+    p.filter.envDepth = 42;
+    p.filter.env = { 0, 13, 0, 10 };
+    p.amp = { 1, 25, 20, 10 };
     p.level = 127;
     p.effects.delayType = DelayType::PanLR;
     p.effects.delayTime = 88;
@@ -313,9 +313,9 @@ Audio song()
 
     // The drums are patches too: a swept triangle and filtered noise.
     Patch kickPatch = single (Wave1::Triangle);
-    kickPatch.pitchEnvDepth = 63;
-    kickPatch.pitchDecay = 34;
-    kickPatch.amp = { 0, 52, 0, 40 };
+    kickPatch.pitchEnvDepth = 42;
+    kickPatch.pitchDecay = 9;
+    kickPatch.amp = { 0, 13, 0, 10 };
     kickPatch.level = 127;
     Performance kick (kickPatch, bpm);
     for (int i = 16; i < 64; ++i)
@@ -324,7 +324,7 @@ Audio song()
     Patch hatPatch = single (Wave1::Noise, 127, 10);
     hatPatch.filter.type = FilterType::HighPass;
     hatPatch.filter.cutoff = 108;
-    hatPatch.amp = { 0, 26, 0, 24 };
+    hatPatch.amp = { 0, 8, 0, 7 };
     hatPatch.level = 127;
     Performance hat (hatPatch, bpm);
     for (int i = 32; i < 64; ++i)
@@ -359,7 +359,7 @@ Audio pad()
 Audio detuneAndMix()
 {
     Patch patch = superSaw (0, 100);
-    patch.amp = { 8, 60, 127, 35 };
+    patch.amp = { 2, 20, 127, 9 };
     Performance p (patch);
     p.note (0, 7, 57);
     p.sweep (0.5, 6, 0, 127, [] (Patch& x, int v) { x.osc1.ctrl1 = v; });
@@ -376,7 +376,7 @@ Audio waveforms()
     {
         const auto wave = static_cast<Wave1> (i);
         Patch patch = single (wave);
-        patch.amp = { 6, 60, 127, 28 };
+        patch.amp = { 2, 20, 127, 9 };
         if (wave == Wave1::SuperSaw)
             patch.osc1.ctrl2 = 105;
         if (wave == Wave1::Noise)
@@ -398,15 +398,15 @@ Audio syncLead()
     patch.osc2.sync = true;
     patch.osc2.range = 3;
     patch.destination = ModDestination::Osc2;
-    patch.pitchEnvDepth = 63;
-    patch.pitchAttack = 40;
-    patch.pitchDecay = 98;
+    patch.pitchEnvDepth = 42;
+    patch.pitchAttack = 9;
+    patch.pitchDecay = 70;
     patch.level = 120;
     patch.mono = true;
     patch.portamento = true;
-    patch.portamentoTime = 20;
+    patch.portamentoTime = 7;
     patch.filter.cutoff = 122;
-    patch.amp = { 5, 60, 115, 38 };
+    patch.amp = { 2, 20, 115, 9 };
     patch.effects.delay = 44;
     patch.effects.delayTime = 86;
     Performance p (patch, 124);
@@ -424,7 +424,7 @@ Audio crossModAndRing()
     Patch patch = single (Wave1::Triangle);
     patch.osc2.wave = Wave2::Triangle;
     patch.osc2.range = 19;
-    patch.amp = { 0, 86, 0, 78 };
+    patch.amp = { 0, 46, 0, 38 };
     patch.level = 127;
     patch.velocityAmp = 0;
     patch.effects.delay = 36;
@@ -451,9 +451,9 @@ Audio feedbackSolo()
     Patch patch = single (Wave1::FeedbackOsc, 40, 112);
     patch.legato = true;
     patch.portamento = true;
-    patch.portamentoTime = 28;
+    patch.portamentoTime = 10;
     patch.filter.cutoff = 119;
-    patch.amp = { 10, 60, 120, 50 };
+    patch.amp = { 2, 20, 120, 11 };
     patch.effects.delay = 46;
     patch.effects.delayTime = 100;
     patch.effects.chorusType = ChorusType::SuperClear;
@@ -499,7 +499,7 @@ Audio bass()
 {
     Patch patch = bassPatch();
     patch.portamento = true;
-    patch.portamentoTime = 8;
+    patch.portamentoTime = 4;
     patch.level = 120;
     Performance p (patch, 136);
     const int line[] { 33, 33, 45, 33, 36, 33, 43, 40, 33, 45, 33, 31, 33, 33, 48, 45 };
@@ -551,7 +551,7 @@ Audio chorusTypes()
     {
         Patch patch = single (Wave1::Saw, 32);
         patch.filter.cutoff = 100;
-        patch.amp = { 8, 60, 120, 30 };
+        patch.amp = { 2, 20, 120, 9 };
         patch.effects.chorusType = static_cast<ChorusType> (i);
         patch.effects.chorus = 105;
         Performance p (patch);

@@ -100,9 +100,7 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
     s.lfoStep = mapping::lfoHz (patch.lfo1.rate) / kControlRate;
     s.lfo2Step = mapping::lfoHz (patch.lfo2.rate) / kControlRate;
     s.fade = mapping::fadeSeconds (patch.lfo1.fade);
-    s.glide = patch.portamento
-                  ? 1.0 - std::exp (-4.0 / (mapping::portamentoSeconds (patch.portamentoTime) * kControlRate))
-                  : 1.0;
+    s.glideSeconds = patch.portamento ? mapping::portamentoSeconds (patch.portamentoTime) : 0.0;
     const EffectParams& fx = patch.effects;
     s.tone.configure (fx.bass, fx.treble);
     s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay);
@@ -116,8 +114,8 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
         Voice& v = voices_[static_cast<std::size_t> (i)];
         const auto set = [] (Envelope& env, const EnvParams& e)
         {
-            env.configure (mapping::attackSeconds (e.attack), mapping::decaySeconds (e.decay),
-                           unit (e.sustain), mapping::decaySeconds (e.release));
+            env.configure (mapping::envelopeTau (e.attack), mapping::envelopeTau (e.decay),
+                           unit (e.sustain), mapping::envelopeTau (e.release));
         };
         set (v.ampEnv, patch.amp);
         set (v.filterEnv, patch.filter.env);
@@ -148,6 +146,9 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
         v.pitch = note;
     else if (fresh || ! monophonic (p))
         v.pitch = s.lastPitch;
+    // [measured] The glide takes the same time whatever the interval.
+    const double ticks = s.glideSeconds * kControlRate;
+    v.glideStep = ticks > 0.0 ? std::abs (v.target - v.pitch) / ticks : 1.0e9;
     if (! start)
         return;
 
@@ -162,8 +163,8 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
     }
     const auto set = [] (Envelope& env, const EnvParams& e)
     {
-        env.configure (mapping::attackSeconds (e.attack), mapping::decaySeconds (e.decay),
-                       unit (e.sustain), mapping::decaySeconds (e.release));
+        env.configure (mapping::envelopeTau (e.attack), mapping::envelopeTau (e.decay),
+                       unit (e.sustain), mapping::envelopeTau (e.release));
         env.trigger();
     };
     set (v.ampEnv, p.amp);
@@ -319,26 +320,29 @@ void Engine::controlVoice (Voice& v, int part) noexcept
     const PartState& s = parts_[static_cast<std::size_t> (part)];
     const Patch& p = s.patch;
     v.age += 1.0 / kControlRate;
-    v.pitch += s.glide * (v.target - v.pitch);
+    if (v.pitch != v.target)
+        v.pitch = v.target > v.pitch ? std::min (v.target, v.pitch + v.glideStep)
+                                     : std::max (v.target, v.pitch - v.glideStep);
 
     const double fade = s.fade > 0.0 ? std::min (1.0, v.age / s.fade) : 1.0;
     const double lfo = s.lfo1 * fade;
 
+    // [measured] Pitch env decay follows the envelope table back to the
+    // played pitch. [inferred] Its attack is taken to be the amp attack's.
     double pitchEnv = 0.0;
     if (p.pitchEnvDepth != 0)
     {
-        const double attack = mapping::attackSeconds (p.pitchAttack);
-        const double decay = mapping::decaySeconds (p.pitchDecay);
-        const double late = (v.age - attack) / decay;
-        if (late < 0.0)
-            pitchEnv = v.age / attack;
-        else if (late < 1.0) // OM p.59: back to exactly the played pitch
-            pitchEnv = (std::exp (-5.0 * late) - 0.006737947) / (1.0 - 0.006737947);
+        const double attackTau = mapping::envelopeTau (p.pitchAttack);
+        const double rise = attackTau * 1.6014; // ln (1.2525 / 0.2525)
+        if (v.age < rise)
+            pitchEnv = Envelope::attackTarget * (1.0 - std::exp (-v.age / std::max (attackTau, 1e-9)));
+        else
+            pitchEnv = std::exp (-(v.age - rise) / std::max (mapping::envelopeTau (p.pitchDecay), 1e-9));
     }
 
     const double envDepth = bipolar (p.pitchEnvDepth);
     const double semis = mapping::pitchLfoSemitones (p.pitchLfo) * lfo
-                         + mapping::pitchEnvSemitones * envDepth * std::abs (envDepth) * pitchEnv;
+                         + mapping::pitchEnvSemitones (p.pitchEnvDepth) * pitchEnv;
     const bool toXmod = p.destination == ModDestination::XMod;
 
     const double common = v.pitch + v.detune + 12.0 * std::clamp (p.oscShift, -2, 2)
@@ -383,8 +387,8 @@ void Engine::controlVoice (Voice& v, int part) noexcept
     const double velocityDepth = bipolar (p.velocityFilter) * (v.velocity - 0.5) * 5.0;
     const double octaves = mapping::cutoffOctaves (p.filter.cutoff)
                            + mapping::keyFollow (p.filter.keyFollow) * (v.pitch - 60.0) / 12.0
-                           + mapping::filterEnvOctaves * bipolar (p.filter.envDepth) * v.filterEnv.value()
-                           + mapping::filterLfoOctaves * bipolar (p.filter.lfoDepth) * lfo
+                           + mapping::filterEnvSemitones (p.filter.envDepth) / 12.0 * v.filterEnv.value()
+                           + mapping::filterLfoSemitones (p.filter.lfoDepth) / 12.0 * lfo
                            + mod_ * 4.0 * bipolar (p.lfo2.filter) * s.lfo2
                            + velocityDepth;
     v.filter.configure (mapping::cutoffCoefficient (octaves), unit (p.filter.resonance), p.filter.type, p.filter.steep);

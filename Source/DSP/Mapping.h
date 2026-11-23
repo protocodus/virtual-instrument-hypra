@@ -114,26 +114,115 @@ inline double resonanceQ (double resonance) noexcept
     return q[i] + (q[i + 1] - q[i]) * (r - at[i]) / (at[i + 1] - at[i]);
 }
 
-// [settled] OM p.61: +32 is 100 %, -64 is -200 %.
-inline double keyFollow (int value) noexcept { return value / 32.0; }
-
-// [inferred] Modulation spans.
-inline constexpr double filterEnvOctaves = 10.0;
-inline constexpr double filterLfoOctaves = 4.0;
-inline constexpr double pitchEnvSemitones = 24.0;
-inline double pitchLfoSemitones (int value) noexcept
+// [measured] Key follow on JE-8086 (cutoff tracked between notes 36 and 84,
+// pivot at 60): +32 is 100 % and +63 200 %, but -64 is only -100 %. OM p.61
+// prints -64 as -200 %; the capture wins.
+inline double keyFollow (int value) noexcept
 {
-    const double d = bipolar (value);
-    return 12.0 * d * std::abs (d);
+    const int v = std::clamp (value, -64, 63);
+    return v < 0 ? v / 64.0 : v / 32.0;
 }
 
-// [inferred] Segment times. The shortest attack clicks, as reviews of the
-// hardware report.
-inline double attackSeconds (int value) noexcept { return 0.0005 * std::pow (12000.0, unit (value)); }
-inline double decaySeconds (int value) noexcept { return 0.004 * std::pow (3000.0, unit (value)); }
-inline double lfoHz (int value) noexcept { return 0.05 * std::pow (500.0, unit (value)); }
+namespace detail
+{
+// Points at 0, 4 ... 60 and 63 of a depth knob, taken symmetrically for
+// negative values (-64 reads as 63).
+inline double depthTable (const std::array<double, 17>& points, int value) noexcept
+{
+    const int v = std::clamp (value, -64, 63);
+    const double a = std::min (std::abs (v), 63);
+    const std::size_t i = std::min<std::size_t> (static_cast<std::size_t> (a / 4.0), 15);
+    const double lo = 4.0 * static_cast<double> (i), hi = i == 15 ? 63.0 : lo + 4.0;
+    const double y = points[i] + (points[i + 1] - points[i]) * (a - lo) / (hi - lo);
+    return v < 0 ? -y : y;
+}
+} // namespace detail
+
+// [measured] Depths on JE-8086. Pitch env: semitones at the envelope's
+// peak, extrapolated back to note-on from the decay. Pitch LFO 1 swings half
+// as far each way (measured 2-4 % short of half, within the tracker's
+// smoothing of the triangle's corners). Filter env: cutoff shift in CUTOFF
+// steps (semitones), read off a resonant noise filter; +63 reaches the
+// top of the range from 0. Filter LFO 1 is half of it (±2 steps, the meter
+// is noisy there).
+inline constexpr std::array<double, 17> pitchEnvTable {
+    0.0, 0.231, 0.955, 2.142, 3.781, 5.864, 8.384, 11.282, 14.57,
+    18.178, 22.098, 26.256, 30.662, 35.21, 39.923, 44.682, 48.324
+};
+inline constexpr std::array<double, 17> filterEnvTable {
+    0.0, 0.37, 1.48, 4.65, 8.72, 14.19, 20.51, 28.05, 36.13,
+    45.18, 54.78, 65.23, 75.98, 87.51, 99.11, 111.18, 120.19
+};
+inline double pitchEnvSemitones (int value) noexcept { return detail::depthTable (pitchEnvTable, value); }
+inline double pitchLfoSemitones (int value) noexcept { return 0.5 * pitchEnvSemitones (value); }
+inline double filterEnvSemitones (int value) noexcept { return detail::depthTable (filterEnvTable, value); }
+inline double filterLfoSemitones (int value) noexcept { return 0.5 * filterEnvSemitones (value); }
+
+// [measured] Seconds to fall 60 dB for DECAY and RELEASE on JE-8086, every
+// value: a fit every fourth step from 12 to 112 (geometric in between; the
+// held-out odd steps land within 1 % median), each value at both ends. The
+// top climbs in groups of four, with a jump at 117. Below 10 the release
+// drops 20-30 dB in a few ms and then trails at about -6 dB per 20 ms; only
+// the fast part is kept. The filter and pitch envelopes use the same table
+// (checked at 16, 48, 80, 112 and at 0-127 for pitch decay).
+inline constexpr std::array<double, 128> envelopeTable {
+    0.001, 0.002, 0.004, 0.006, 0.009, 0.01, 0.015, 0.018,
+    0.02, 0.026, 0.0885, 0.0965, 0.1018, 0.1094, 0.1175, 0.1261,
+    0.1355, 0.1454, 0.1562, 0.1677, 0.1801, 0.1924, 0.2056, 0.2197,
+    0.2347, 0.25, 0.2663, 0.2837, 0.3022, 0.3237, 0.3467, 0.3713,
+    0.3977, 0.4209, 0.4454, 0.4713, 0.4987, 0.5287, 0.5605, 0.5942,
+    0.6299, 0.668, 0.7083, 0.7511, 0.7965, 0.8449, 0.8963, 0.9508,
+    1.009, 1.069, 1.134, 1.202, 1.275, 1.35, 1.431, 1.516,
+    1.606, 1.682, 1.761, 1.845, 1.932, 1.99, 2.05, 2.112,
+    2.176, 2.252, 2.33, 2.41, 2.494, 2.593, 2.696, 2.803,
+    2.915, 3.053, 3.198, 3.35, 3.509, 3.661, 3.819, 3.984,
+    4.155, 4.292, 4.432, 4.578, 4.728, 4.901, 5.08, 5.266,
+    5.459, 5.696, 5.943, 6.201, 6.47, 6.814, 7.176, 7.557,
+    7.959, 8.501, 9.079, 9.698, 10.36, 10.77, 11.19, 11.63,
+    12.09, 12.65, 13.23, 13.84, 14.48, 15.33, 16.23, 17.19,
+    18.2, 19.07, 20.31, 20.88, 21.52, 54.98, 53.45, 56.74,
+    57.58, 68.45, 69.12, 71.73, 73.01, 92.99, 91.41, 100.9
+};
+inline double envelopeSeconds60 (int value) noexcept
+{
+    return envelopeTable[static_cast<std::size_t> (std::clamp (value, 0, 127))];
+}
+// One time constant of the table, used by every stage.
+inline double envelopeTau (int value) noexcept { return envelopeSeconds60 (value) / 6.907755279; }
+
+// [measured] LFO 1 RATE on JE-8086 at 0, 4 ... 124 and 127, from the slope
+// of a pitch-modulating triangle (to 52) and from its cycle count (from 56).
+// 127 jumps to 50 Hz. Geometric between points.
+inline constexpr std::array<double, 33> lfoTable {
+    0.0499, 0.06252, 0.07701, 0.1006, 0.1375, 0.1757, 0.2368, 0.3002, 0.3878, 0.5049, 0.6534,
+    0.8505, 1.103, 1.435, 1.865, 2.406, 3.225, 3.674, 4.207, 4.794, 5.426, 6.163,
+    7.031, 7.992, 9.091, 11.12, 11.77, 14.0, 16.15, 18.29, 20.73, 22.72, 50.04
+};
+inline double lfoHz (int value) noexcept
+{
+    const double a = std::clamp (value, 0, 127);
+    const std::size_t i = std::min<std::size_t> (static_cast<std::size_t> (a / 4.0), 31);
+    const double lo = 4.0 * static_cast<double> (i), hi = i == 31 ? 127.0 : lo + 4.0;
+    return lfoTable[i] * std::pow (lfoTable[i + 1] / lfoTable[i], (a - lo) / (hi - lo));
+}
+
+// [inferred] LFO 1 FADE, not captured yet.
 inline double fadeSeconds (int value) noexcept { return 8.0 * unit (value) * unit (value); }
-inline double portamentoSeconds (int value) noexcept { return 0.004 * std::pow (750.0, unit (value)); }
+
+// [measured] PORTAMENTO TIME on JE-8086: a straight line in pitch that takes
+// the same time for 5, 12 and 24 semitones, up or down. Seconds at 0, 16
+// ... 112 and 127, geometric between (the in-between steps are not
+// captured).
+inline constexpr std::array<double, 9> portamentoTable { 0.0, 0.027, 0.056, 0.150, 0.316, 0.574, 1.084, 2.425, 8.95 };
+inline double portamentoSeconds (int value) noexcept
+{
+    const double a = std::clamp (value, 0, 127);
+    const std::size_t i = std::min<std::size_t> (static_cast<std::size_t> (a / 16.0), 7);
+    const double lo = 16.0 * static_cast<double> (i), hi = i == 7 ? 127.0 : lo + 16.0, u = (a - lo) / (hi - lo);
+    if (i == 0)
+        return portamentoTable[1] * u;
+    return portamentoTable[i] * std::pow (portamentoTable[i + 1] / portamentoTable[i], u);
+}
 
 // [settled] OM p.65: the delay time of each type with TIME fully right.
 // PANNING SHORT is printed as 156 ms and as a quarter of 625 ms.

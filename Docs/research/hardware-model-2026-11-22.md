@@ -87,9 +87,8 @@ at 34 and 73 kHz.
 | Feedback oscillator | limited loop with a mode-selecting band-pass, its gains and bloom | dry recordings at several settings |
 | X-mod | linear through-zero FM, square-law depth | sidebands against depth |
 | Sync | reset on the sample | spectrum at high ratios |
-| Filter modulation spans in the new semitone scale | env 10, LFO 4 "octaves" of twelve steps | black-box sweeps |
-| Cutoff, envelope, LFO, portamento tapers | exponential maps in `Mapping.h` | timed recordings |
-| Pitch and filter modulation spans | 24 semitones, 10 and 4 octaves | recordings at full depth |
+| Release below 10, attack below 32, the late envelope starts | the fast part of one exponential; no delay | finer captures |
+| LFO 1 FADE, LFO 2 rate, velocity | old guesses (LFO 2 uses the LFO 1 table) | black-box sweeps |
 | Control rate | 2.76 kHz with interpolated cutoff and gain | stepping in a fast sweep |
 | Tone control | 12 dB at full travel | swept response |
 | Chorus and flanger types | names from the manual, settings chosen here | impulse response per type |

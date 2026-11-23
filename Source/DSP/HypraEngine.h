@@ -48,7 +48,7 @@ private:
         bool active { false }, held { false }, sustained { false };
         int note { 60 };
         std::uint64_t order { 0 };
-        double velocity { 1.0 }, pitch { 60.0 }, target { 60.0 }, detune { 0.0 };
+        double velocity { 1.0 }, pitch { 60.0 }, target { 60.0 }, detune { 0.0 }, glideStep { 1.0e9 };
         double age { 0.0 };
         double gain { 0.0 }, gainStep { 0.0 };
         double dcX { 0.0 }, dcY { 0.0 };
@@ -66,7 +66,7 @@ private:
         std::array<HeldNote, 128> keys {};
         int keyCount { 0 };
         double lfoPhase { 0.0 }, lfoHeld { 0.0 }, lfo1 { 0.0 }, lfo2Phase { 0.0 }, lfo2 { 0.0 };
-        double lfoStep { 0.0 }, lfo2Step { 0.0 }, fade { 0.0 }, glide { 1.0 };
+        double lfoStep { 0.0 }, lfo2Step { 0.0 }, fade { 0.0 }, glideSeconds { 0.0 };
         double lastPitch { 60.0 };
         double panL { 1.0 }, panR { 1.0 }, panStepL { 0.0 }, panStepR { 0.0 };
         bool hasPlayed { false };
