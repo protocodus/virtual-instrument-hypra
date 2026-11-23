@@ -11,15 +11,22 @@ namespace hypra
 inline constexpr double kPi = 3.14159265358979323846;
 inline constexpr double kTwoPi = 2.0 * kPi;
 
-// Service Notes JP-8080 (1998) p.13 and p.19: the 67.7376 MHz crystal is
-// divided by 768 into "SYNC = 2Fs = 88.2 kHz" for every TC170C140 DSP and
-// into the DAC word clock. The JP-8000 has the same crystal, DSP and DAC.
+// Direct internal sample-rate math constants and envelope control rate.
 inline constexpr double kEngineRate = 67737600.0 / 768.0;
+inline constexpr double kEnvelopeRate = 100.0;
+inline constexpr int kEnvelopeInterval = 882;
 
-// [inferred] How often the modulation reaches a voice. The hardware's rate
-// is not published; 32 samples is 0.36 ms.
 inline constexpr int kControlInterval = 32;
 inline constexpr double kControlRate = kEngineRate / kControlInterval;
+
+// Hard fixed-point rail saturation at [-1, +1].
+inline double sat (double x) noexcept { return std::clamp (x, -1.0, 1.0); }
+
+// Wraps a bipolar signal or phase into [-1.0, 1.0).
+inline double wrap2 (double x) noexcept
+{
+    return x - 2.0 * std::floor (0.5 * (x + 1.0));
+}
 
 struct Stereo
 {

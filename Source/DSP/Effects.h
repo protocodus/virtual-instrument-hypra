@@ -1,8 +1,8 @@
-// OM p.65 connection: TONE CONTROL -> DELAY -> CHORUS (fed from the sum,
-// added to the delay's stereo) -> PAN. The twelve chorus and five delay
-// type names are Roland's; every modulation setting is [inferred].
+// Part effects chain: ToneControl -> Delay -> Multi-FX Chorus.
 #pragma once
 
+#include "Core.h"
+#include "HypraPatch.h"
 #include "Mapping.h"
 
 #include <array>
@@ -13,72 +13,51 @@ namespace hypra
 class ToneControl
 {
 public:
-    void reset() noexcept { lowState_ = highState_ = 0.0; }
+    void reset() noexcept { xB1_ = yB1_ = xT1_ = yT1_ = 0.0; }
 
-    // [measured, black box] JE-8086 TONE CONTROL: first-order shelves.
-    // TREBLE turns above a fixed 940 Hz (+9.8 dB at 32, +14.6 at 63); BASS
-    // below a fixed 435 Hz (+6.5 dB at 32, +28.7 at 63, which still rises
-    // at 31 Hz). Cuts mirror the boosts. Gains in dB are straight between
-    // 0, 32 and 63.
     void configure (int bass, int treble) noexcept
     {
-        low_ = shelf (gainDb (bass, 6.52, 28.67), true);
-        high_ = shelf (gainDb (treble, 9.82, 14.61), false);
+        const auto bi = static_cast<std::size_t> (std::clamp (bass + 64, 0, 127));
+        const auto ti = static_cast<std::size_t> (std::clamp (treble + 64, 0, 127));
+        bB_ = static_cast<double> (mapping::toneBassB[bi]) / 32768.0;
+        aB_ = static_cast<double> (mapping::toneBassA[bi]) / 32768.0;
+        bT_ = static_cast<double> (mapping::toneTrebleB[ti]) / 32768.0;
+        aT_ = static_cast<double> (mapping::toneTrebleA[ti]) / 32768.0;
+        gCut_ = static_cast<double> (mapping::toneTrebleCut[ti]) / 16384.0;
+        gBoost_ = static_cast<double> (mapping::toneTrebleBoost[ti]) / 16384.0;
     }
 
+    // Internal hardware gain staging with rail clipping and -12 dB flat headroom.
+    double processSaturating (double x) noexcept
+    {
+        const double yB = sat (x - bB_ * xB1_ + aB_ * yB1_);
+        xB1_ = x;
+        yB1_ = yB;
+        const double yBout = gCut_ * yB;
+        const double yT = sat (yBout - bT_ * xT1_ + aT_ * yT1_);
+        xT1_ = yBout;
+        yT1_ = yT;
+        return gBoost_ * yT;
+    }
+
+    // Unclipped unity-normalized shelf response for standalone frequency sweeps.
     double process (double x) noexcept
     {
-        return section (high_, highState_, section (low_, lowState_, x));
+        const double yB = x - bB_ * xB1_ + aB_ * yB1_;
+        xB1_ = x;
+        yB1_ = yB;
+        const double yBout = gCut_ * yB;
+        const double yT = yBout - bT_ * xT1_ + aT_ * yT1_;
+        xT1_ = yBout;
+        yT1_ = yT;
+        return 4.0 * gBoost_ * yT;
     }
 
 private:
-    struct Coefficients
-    {
-        double b0 { 1.0 }, b1 { 0.0 }, a1 { 0.0 };
-    };
-
-    static double gainDb (int value, double at32, double at63) noexcept
-    {
-        const double v = std::abs (std::clamp (value, -64, 63) * 1.0);
-        const double g = v <= 32.0 ? at32 * v / 32.0 : at32 + (at63 - at32) * std::min (1.0, (v - 32.0) / 31.0);
-        return value < 0 ? -g : g;
-    }
-
-    // Bilinear first-order shelf. Low: (s + G w) / (s + w) with the upper
-    // turn at 435 Hz; high: (G s + w) / (s + w) with the lower turn at 940 Hz.
-    // A cut is the boost's inverse.
-    static Coefficients shelf (double gainDb, bool low) noexcept
-    {
-        const double g = std::pow (10.0, std::abs (gainDb) / 20.0);
-        const double turn = low ? 435.0 / g : 940.0 * g;
-        const double k = std::tan (kPi * std::min (turn, 0.45 * kEngineRate) / kEngineRate);
-        // analog (n1 s + n0) / (d1 s + d0) with s normalised to w
-        double n1 = 1.0, n0 = low ? g : 1.0, d1 = 1.0, d0 = 1.0;
-        if (! low)
-            n1 = g;
-        if (gainDb < 0.0)
-        {
-            std::swap (n1, d1);
-            std::swap (n0, d0);
-        }
-        const double a0 = d1 + d0 * k;
-        Coefficients c;
-        c.b0 = (n1 + n0 * k) / a0;
-        c.b1 = (n0 * k - n1) / a0;
-        c.a1 = (d0 * k - d1) / a0;
-        return c;
-    }
-
-    static double section (const Coefficients& c, double& state, double x) noexcept
-    {
-        // transposed direct form II
-        const double y = c.b0 * x + state;
-        state = c.b1 * x - c.a1 * y;
-        return y;
-    }
-
-    Coefficients low_, high_;
-    double lowState_ { 0.0 }, highState_ { 0.0 };
+    double bB_ { 31743.0 / 32768.0 }, aB_ { 31743.0 / 32768.0 };
+    double bT_ { 30589.0 / 32768.0 }, aT_ { 30589.0 / 32768.0 };
+    double gCut_ { 1.0 }, gBoost_ { 0.25 };
+    double xB1_ { 0.0 }, yB1_ { 0.0 }, xT1_ { 0.0 }, yT1_ { 0.0 };
 };
 
 class Delay
@@ -86,85 +65,123 @@ class Delay
 public:
     void prepare()
     {
-        left_.assign (size, 0.0f);
-        right_.assign (size, 0.0f);
+        buf_.assign (size, 0.0f);
         write_ = 0;
+        reset();
     }
 
     void reset() noexcept
     {
-        std::fill (left_.begin(), left_.end(), 0.0f);
-        std::fill (right_.begin(), right_.end(), 0.0f);
+        std::fill (buf_.begin(), buf_.end(), 0.0f);
         write_ = 0;
+        lp_ = dc_ = 0.0;
         snap();
     }
 
     void configure (DelayType type, int time, int feedback, int level) noexcept
     {
         type_ = type;
-        target_ = std::min (mapping::delaySeconds (type, time) * kEngineRate, size - 3.0);
-        feedback_ = mapping::delayFeedback (feedback);
-        level_ = mapping::delayLevel (type) * mapping::effectLevel (level);
+        d1Target_ = std::clamp (mapping::delaySamples (type, time), 2.0, static_cast<double> (size - 3));
+        fbTarget_ = mapping::delayFeedback (feedback);
+        lvlTarget_ = mapping::effectLevel (level);
+        switch (type)
+        {
+            case DelayType::PanLR:
+            case DelayType::PanRL:
+                lpfK_ = 103.0 / 128.0;
+                break;
+            case DelayType::PanShort:
+            case DelayType::MonoShort:
+                lpfK_ = 107.0 / 128.0;
+                break;
+            case DelayType::MonoLong:
+                lpfK_ = 96.0 / 128.0;
+                break;
+        }
     }
 
-    void snap() noexcept { delay_ = target_; }
+    void snap() noexcept
+    {
+        d1_ = d1Target_;
+        fb_ = fbTarget_;
+        lvl_ = lvlTarget_;
+    }
 
-    // The wet signal only.
     Stereo process (double x) noexcept
     {
-        delay_ += 0.0001 * (target_ - delay_); // moving TIME bends the echoes
-        if (std::abs (target_ - delay_) < 1.0e-4)
-            delay_ = target_;
-        const double position = write_ - delay_ + size;
-        const int index = static_cast<int> (position);
-        const double fraction = position - index;
-        const auto read = [&] (const std::vector<float>& b)
-        {
-            const double a = b[static_cast<std::size_t> (index & mask)];
-            return a + fraction * (b[static_cast<std::size_t> ((index + 1) & mask)] - a);
-        };
-        const double l = read (left_), r = read (right_);
-        const bool mono = type_ == DelayType::MonoShort || type_ == DelayType::MonoLong;
-        // Panning: the line alternates, so the first echo is on the first side.
-        left_[static_cast<std::size_t> (write_)] = store (x + feedback_ * (mono ? l : r));
-        right_[static_cast<std::size_t> (write_)] = store (mono ? 0.0 : feedback_ * l);
+        d1_ += 0.0002 * (d1Target_ - d1_);
+        if (std::abs (d1Target_ - d1_) < 1.0e-4)
+            d1_ = d1Target_;
+        fb_ += (1.0 / 128.0) * (fbTarget_ - fb_);
+        lvl_ += (1.0 / 256.0) * (lvlTarget_ - lvl_);
+
+        const double d2 = 0.5 * d1_;
+        const double tap1 = read (d1_);
+        const double tap2 = read (d2);
+
+        const double sIn = sat (0.75 * x + fb_ * tap1);
+        lp_ = sat ((1.0 - lpfK_) * sIn + lpfK_ * lp_);
+        const double hp = sat (0.998046875 * lp_ + dc_);
+        dc_ = sat (dc_ - 0.00390625 * hp);
+        buf_[static_cast<std::size_t> (write_)] = static_cast<float> (hp);
         write_ = (write_ + 1) & mask;
-        if (mono)
-            return { level_ * l, level_ * l };
-        // [measured] PANNING SHORT answers on the right first, like R->L.
-        return type_ == DelayType::PanRL || type_ == DelayType::PanShort ? Stereo { level_ * r, level_ * l }
-                                        : Stereo { level_ * l, level_ * r };
+
+        const double w1 = lvl_ * tap1;
+        const double w2 = lvl_ * tap2;
+        switch (type_)
+        {
+            case DelayType::PanLR:
+                return { w2, w1 };
+            case DelayType::PanRL:
+            case DelayType::PanShort:
+                return { w1, w2 };
+            case DelayType::MonoShort:
+            case DelayType::MonoLong:
+                break;
+        }
+        return { w1, w1 };
+    }
+
+    Stereo processMix (double x) noexcept
+    {
+        const Stereo wet = process (x);
+        return { sat (0.875 * x + wet.l), sat (0.875 * x + wet.r) };
     }
 
 private:
-    static float store (double v) noexcept
+    double read (double delaySamples) const noexcept
     {
-        return std::abs (v) < 1.0e-12 ? 0.0f : static_cast<float> (std::clamp (v, -4.0, 4.0));
+        if (buf_.empty())
+            return 0.0;
+        const double position = static_cast<double> (write_) - delaySamples + size;
+        const int index = static_cast<int> (position);
+        const double fraction = position - index;
+        const double a = buf_[static_cast<std::size_t> (index & mask)];
+        const double b = buf_[static_cast<std::size_t> ((index + 1) & mask)];
+        return a + fraction * (b - a);
     }
 
     static constexpr int size = 1 << 17, mask = size - 1;
-    std::vector<float> left_, right_;
+    std::vector<float> buf_;
     int write_ { 0 };
     DelayType type_ { DelayType::PanLR };
-    double delay_ { 100.0 }, target_ { 100.0 }, feedback_ { 0.0 }, level_ { 0.0 };
+    double d1_ { 17640.0 }, d1Target_ { 17640.0 };
+    double fb_ { 0.0 }, fbTarget_ { 0.0 };
+    double lvl_ { 0.0 }, lvlTarget_ { 0.0 };
+    double lpfK_ { 103.0 / 128.0 }, lp_ { 0.0 }, dc_ { 0.0 };
 };
 
+// Unified stereo dual-tap Multi-FX engine across all twelve chorus, flanger, and phaser presets.
 class Chorus
 {
 public:
     void reset() noexcept
     {
-        for (auto& line : line_)
-            line.fill (0.0f);
-        for (auto& chain : allPass_)
-            chain.fill (0.0);
-        for (auto& side : taps_)
-            side.fill ({});
-        fed_ = {};
-        highPass_ = {};
+        buf_.fill (0.0f);
         write_ = 0;
         phase_ = 0.0;
-        prime_ = true;
+        lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0.0;
+        snap();
     }
 
     void configure (ChorusType type, int level) noexcept
@@ -172,127 +189,88 @@ public:
         if (type != type_)
         {
             type_ = type;
-            prime_ = true;
+            phase_ = 0.0;
+            lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0.0;
         }
-        level_ = mapping::effectLevel (level) * mapping::chorusWetGain (type);
+        lvlTarget_ = mapping::effectLevel (level);
     }
 
-    void control() noexcept
-    {
-        const Preset& p = presets[static_cast<std::size_t> (type_)];
-        phase_ += p.rate / kControlRate;
-        phase_ -= std::floor (phase_);
-        for (int side = 0; side < 2; ++side)
-        {
-            const auto s = static_cast<std::size_t> (side);
-            if (p.stages > 0)
-            {
-                const double swing = 0.5 + 0.5 * std::sin (kTwoPi * (phase_ + side * p.spread));
-                const double t = std::tan (kPi * 120.0 * std::exp2 (p.depth * swing) / kEngineRate);
-                coefficient_[s] = (t - 1.0) / (t + 1.0);
-                continue;
-            }
-            for (int tap = 0; tap < p.taps; ++tap)
-            {
-                const double angle = phase_ + static_cast<double> (tap) / p.taps + side * p.spread;
-                const double ms = p.base + p.depth * std::sin (kTwoPi * angle);
-                Tap& t = taps_[s][static_cast<std::size_t> (tap)];
-                const double target = std::max (1.0, ms * 0.001 * kEngineRate);
-                if (prime_)
-                    t.delay = target;
-                t.step = (target - t.delay) / kControlInterval;
-            }
-        }
-        prime_ = false;
-    }
+    void snap() noexcept { lvl_ = lvlTarget_; }
 
-    Stereo process (double x) noexcept
+    Stereo process (double monoDry) noexcept { return processMix ({ monoDry, monoDry }); }
+
+    Stereo processMix (Stereo dry) noexcept
     {
         const Preset& p = presets[static_cast<std::size_t> (type_)];
-        Stereo out;
-        for (int side = 0; side < 2; ++side)
-        {
-            const auto s = static_cast<std::size_t> (side);
-            double& fed = side ? fed_.r : fed_.l;
-            const double input = x + p.feedback * fed;
-            double wet = 0.0;
-            if (p.stages > 0)
-            {
-                const double c = coefficient_[s];
-                double v = input;
-                for (int i = 0; i < p.stages; ++i)
-                {
-                    double& z = allPass_[s][static_cast<std::size_t> (i)];
-                    const double y = c * v + z;
-                    z = v - c * y;
-                    v = y;
-                }
-                wet = v;
-            }
-            else
-            {
-                for (int tap = 0; tap < p.taps; ++tap)
-                {
-                    Tap& t = taps_[s][static_cast<std::size_t> (tap)];
-                    t.delay += t.step;
-                    const double position = write_ - t.delay + size;
-                    const int index = static_cast<int> (position);
-                    const double a = line_[s][static_cast<std::size_t> (index & mask)];
-                    const double b = line_[s][static_cast<std::size_t> ((index + 1) & mask)];
-                    wet += a + (position - index) * (b - a);
-                }
-                wet *= p.taps == 3 ? 0.5 : 1.0;
-                line_[s][static_cast<std::size_t> (write_)] = static_cast<float> (softClip (input / 3.0) * 3.0);
-            }
-            fed = softClip (wet);
-            if (p.highPass)
-            {
-                double& z = side ? highPass_.r : highPass_.l;
-                z += highPole_ * (wet - z);
-                wet -= z;
-            }
-            (side ? out.r : out.l) = level_ * wet;
-        }
+        lvl_ += (1.0 / 128.0) * (lvlTarget_ - lvl_);
+
+        phase_ = wrap2 (phase_ + 2.0 * p.rateHz / kEngineRate);
+        const double triL = std::abs (phase_) - 0.5;
+        const double triR = -triL;
+
+        const double dL = std::max (1.0, (triL + 0.5) * p.modSmp + p.baseSmp);
+        const double dR = std::max (1.0, (triR + 0.5) * p.modSmp + p.baseSmp + p.dRSmp);
+        const double tapLRaw = read (dL);
+        const double tapRRaw = read (dR);
+
+        const double m = 0.5 * (dry.l + dry.r);
+        lpIn_ = (1.0 - p.inFlt) * m + p.inFlt * lpIn_;
+        const double hpIn = m - lpIn_;
+
+        const double fbIn = p.fb * tapRRaw;
+        fbLp_ = (1.0 - p.fbFlt) * fbIn + p.fbFlt * fbLp_;
+
+        const double toDelay = sat (0.998046875 * (hpIn + fbLp_) + dc_);
+        dc_ = sat (dc_ - 0.00390625 * toDelay);
+        buf_[static_cast<std::size_t> (write_)] = static_cast<float> (toDelay);
         write_ = (write_ + 1) & mask;
-        return out;
+
+        const double tapL = lvl_ * tapLRaw;
+        const double tapR = lvl_ * tapRRaw;
+        const double combL = tapL - 0.703125 * tapR;
+        const double combR = tapR - 0.703125 * tapL;
+        wetL_ = (1.0 - p.outFlt) * combL + p.outFlt * wetL_;
+        wetR_ = (1.0 - p.outFlt) * combR + p.outFlt * wetR_;
+
+        return { 0.90625 * sat (dry.l + wetL_), 0.90625 * sat (dry.r + wetR_) };
     }
 
 private:
     struct Preset
     {
-        double base, depth; // ms, or for a phaser the sweep in octaves
-        double rate, feedback, spread;
-        int taps, stages;
-        bool highPass;
+        double inFlt, fbFlt, fb, baseSmp, modSmp, dRSmp, rateHz, outFlt;
     };
 
     static constexpr std::array<Preset, 12> presets { {
-        { 13.0, 3.2, 0.28, 0.0, 0.17, 3, 0, false },  // SUPER CHORUS SLW
-        { 11.0, 2.0, 0.65, 0.0, 0.17, 3, 0, false },  // SUPER CHORUS MID
-        { 8.0, 0.6, 2.60, 0.0, 0.17, 3, 0, false },   // SUPER CHORUS FST
-        { 10.0, 1.8, 0.45, 0.0, 0.17, 3, 0, true },   // SUPER CHORUS CLR
-        { 2.6, 2.1, 0.12, 0.70, 0.25, 1, 0, false },  // FLANGER SLOW
-        { 4.5, 4.2, 0.22, 0.80, 0.25, 1, 0, false },  // FLANGER DEEP
-        { 2.0, 1.5, 1.60, 0.65, 0.25, 1, 0, false },  // FLANGER FAST
-        { 0.0, 5.5, 0.15, 0.55, 0.25, 1, 6, false },  // DEEP PHASING SLW
-        { 0.0, 6.5, 0.09, 0.82, 0.10, 1, 12, false }, // JET PHASING
-        { 3.0, 2.6, 0.90, -0.75, 0.50, 1, 0, false }, // TWISTING
-        { 12.1, 0.0, 0.00, 0.35, 0.00, 1, 0, false }, // FREEZE PHASE 1 [measured comb, 11.6-12.6 ms, weak]
-        { 0.92, 0.0, 0.00, 0.10, 0.00, 1, 0, false }, // FREEZE PHASE 2 [measured comb, 0.92 ms, faint]
+        { 0.993103, 0.000000,  0.00000, 1152.0, 1536.0,  2.0, 0.06309, 0.52344 },
+        { 0.993103, 0.000000,  0.00000,  512.0,  232.0,  2.0, 0.42057, 0.50781 },
+        { 0.973572, 0.000000,  0.00000, 1280.0,   44.0,  2.0, 4.03748, 0.62103 },
+        { 0.937500, 0.531250, -0.32812, 1536.0, 1280.0,  2.0, 0.08411, 0.25000 },
+        { 0.968689, 0.515625,  0.78125,  128.0,  100.0,  0.0, 0.31543, 0.25000 },
+        { 0.999939, 0.515625,  0.79688,   64.0,  224.0,  0.0, 0.35748, 0.25000 },
+        { 0.953064, 0.531250,  0.71875,  128.0,   60.0,  0.0, 1.68228, 0.37500 },
+        { 0.999939, 0.539062, -0.95532,    0.0,   20.0,  1.0, 0.08411, 0.25000 },
+        { 0.974548, 0.539062, -0.68750,  224.0, 1280.0,  1.0, 0.08411, 0.25000 },
+        { 0.999939, 0.539062, -0.59375, 1536.0,   40.0,  1.0, 0.16823, 0.25000 },
+        { 0.875977, 0.542969, -0.37500, 1024.0,   10.0, 80.0, 0.00000, 0.50000 },
+        { 0.875977, 0.542969, -0.18750, 3072.0,   10.0, 80.0, 0.00000, 0.50000 },
     } };
 
-    struct Tap { double delay { 441.0 }, step { 0.0 }; };
+    double read (double delaySamples) const noexcept
+    {
+        const double position = static_cast<double> (write_) - delaySamples + size;
+        const int index = static_cast<int> (position);
+        const double fraction = position - index;
+        const double a = buf_[static_cast<std::size_t> (index & mask)];
+        const double b = buf_[static_cast<std::size_t> ((index + 1) & mask)];
+        return a + fraction * (b - a);
+    }
 
-    static constexpr int size = 4096, mask = size - 1;
-    std::array<std::array<float, size>, 2> line_ {};
-    std::array<std::array<double, 12>, 2> allPass_ {};
-    std::array<std::array<Tap, 3>, 2> taps_ {};
-    std::array<double, 2> coefficient_ {};
-    Stereo fed_, highPass_;
-    double highPole_ { onePole (700.0) };
-    ChorusType type_ { ChorusType::SuperSlow };
-    double level_ { 0.0 }, phase_ { 0.0 };
+    static constexpr int size = 8192, mask = size - 1;
+    std::array<float, size> buf_ {};
     int write_ { 0 };
-    bool prime_ { true };
+    ChorusType type_ { ChorusType::SuperSlow };
+    double lvl_ { 0.0 }, lvlTarget_ { 0.0 }, phase_ { 0.0 };
+    double lpIn_ { 0.0 }, fbLp_ { 0.0 }, dc_ { 0.0 }, wetL_ { 0.0 }, wetR_ { 0.0 };
 };
 } // namespace hypra

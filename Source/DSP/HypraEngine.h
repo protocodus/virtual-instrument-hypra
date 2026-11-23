@@ -4,6 +4,7 @@
 #include "AnalogOutput.h"
 #include "Effects.h"
 #include "Envelope.h"
+#include "Filter.h"
 #include "Oscillators.h"
 #include "Resampler.h"
 
@@ -46,14 +47,13 @@ private:
     {
         OscillatorPair oscillators;
         Filter filter;
-        Envelope ampEnv, filterEnv;
+        Envelope ampEnv, filterEnv, pitchEnv;
         bool active { false }, held { false }, sustained { false };
         int note { 60 };
         std::uint64_t order { 0 };
         double velocity { 1.0 }, pitch { 60.0 }, target { 60.0 }, detune { 0.0 }, glideStep { 1.0e9 };
         double age { 0.0 };
-        double gain { 0.0 }, gainStep { 0.0 };
-        double dcX { 0.0 }, dcY { 0.0 };
+        double ampBase { 0.0 }, ampSmoothed { 0.0 };
     };
 
     struct HeldNote { int note { 0 }, velocity { 0 }; };
@@ -70,7 +70,8 @@ private:
         double lfoPhase { 0.0 }, lfoHeld { 0.0 }, lfo1 { 0.0 }, lfo2Phase { 0.0 }, lfo2 { 0.0 };
         double lfoStep { 0.0 }, lfo2Step { 0.0 }, fade { 0.0 }, glideSeconds { 0.0 };
         double lastPitch { 60.0 };
-        double panL { 1.0 }, panR { 1.0 }, panStepL { 0.0 }, panStepR { 0.0 };
+        double panL { mapping::panCenterGain }, panR { mapping::panCenterGain };
+        double panTargetL { mapping::panCenterGain }, panTargetR { mapping::panCenterGain };
         bool hasPlayed { false };
     };
 
@@ -94,7 +95,7 @@ private:
     KeyMode mode_ { KeyMode::Single };
     std::uint32_t seed_ { 8000 };
     std::uint64_t order_ { 0 };
-    double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, dcPole_ { 0.9997 }, tune_ { 0.0 };
+    double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, tune_ { 0.0 };
     int partDetune_ { 0 }, untilControl_ { 0 };
     bool sustain_ { false };
 };

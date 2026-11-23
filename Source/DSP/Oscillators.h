@@ -1,10 +1,8 @@
-// The seven OSC 1 waveforms and three OSC 2 waveforms. All run naively at
-// 88.2 kHz: the aliasing is part of the instrument, so there is no BLEP.
-// Shapes follow the drawings and wording in OM pp.55-56; the formulas that
-// make those shapes are this project's own.
+// OSC 1 (seven waveforms) and OSC 2 (three waveforms, sync, ring, X-Mod) at 88.2 kHz.
 #pragma once
 
-#include "Filter.h"
+#include "Core.h"
+#include "HypraPatch.h"
 #include "Mapping.h"
 
 #include <array>
@@ -13,214 +11,279 @@ namespace hypra
 {
 namespace osc
 {
-inline constexpr double phaseScale = 1.0 / 4294967296.0;
-
-// [measured] 24-bit phase at 88.2 kHz, here in the top bits: the saws of a
-// recorded JP-8080 drift apart in exact multiples of 88200 / 2^24 Hz.
-inline std::uint32_t increment (double hz) noexcept
+// 24-bit phase accumulator in top bits of a 32-bit unsigned word.
+inline std::uint32_t increment24 (double hz) noexcept
 {
     const double cycles = std::clamp (hz / kEngineRate, -0.499, 0.499);
     const auto steps = static_cast<std::int32_t> (cycles * 16777216.0);
     return static_cast<std::uint32_t> (steps) << 8;
 }
 
-inline double unitPhase (std::uint32_t phase) noexcept { return phase * phaseScale; }
-
-// Built at compile time: the Rack Extension toolchain refuses a global with a
-// run-time initialiser, so the table is a constant and its sine a series.
-class SineTable
+inline double bipolarPhase (std::uint32_t phase) noexcept
 {
-public:
-    constexpr SineTable() noexcept
-    {
-        for (std::size_t i = 0; i < values_.size(); ++i)
-            values_[i] = series (kTwoPi * static_cast<double> (i) / size);
-    }
-
-    double operator() (double cycles) const noexcept
-    {
-        const double position = (cycles - std::floor (cycles)) * size;
-        const auto index = std::min (static_cast<std::size_t> (position), static_cast<std::size_t> (size - 1));
-        return values_[index] + (position - static_cast<double> (index)) * (values_[index + 1] - values_[index]);
-    }
-
-private:
-    static constexpr int size = 2048;
-
-    // sin x for x in [0, 2 pi]: folded to [-pi/2, pi/2], then Taylor's series
-    // to its 25th power (an error below 1e-15 there).
-    static constexpr double series (double x) noexcept
-    {
-        if (x > kPi)
-            x -= kTwoPi;
-        if (x > 0.5 * kPi)
-            x = kPi - x;
-        else if (x < -0.5 * kPi)
-            x = -kPi - x;
-        double term = x, sum = x;
-        for (int n = 1; n < 13; ++n)
-        {
-            term *= -x * x / ((2.0 * n) * (2.0 * n + 1.0));
-            sum += term;
-        }
-        return sum;
-    }
-
-    std::array<double, size + 1> values_ {};
-};
-
-inline constexpr SineTable sine;
-
-inline double triangle (double p) noexcept { return 1.0 - 4.0 * std::abs (p - 0.5); }
-
-// Mean removed, as a pulse wave at the jack has none.
-inline double square (double p, double width) noexcept
-{
-    const double duty = mapping::pulseDuty (width);
-    return (p < duty ? 1.0 : -1.0) - (2.0 * duty - 1.0);
+    return phase * (1.0 / 2147483648.0) - 1.0;
 }
 
-// [measured, black box] SHAPE: round at 0, a plain saw at 32, then the
-// fundamental falls away and inverts; see mapping::sawShapeK.
-inline double shapedSaw (double p, double shape) noexcept
+inline double triangle (double p) noexcept
 {
-    const double saw = 2.0 * p - 1.0;
-    // (pi^2 / 6)(s - s^3) is the wave whose harmonics are the saw's over n^2.
-    return saw + mapping::sawShapeK (shape) * 1.6449340668 * (saw - saw * saw * saw);
+    return 1.0 - 4.0 * std::abs (p - 0.5);
 }
 
-// OM p.56: triangle, cusped in the centre, folded double humps at the top.
-inline double shapedTriangle (double p, double shape) noexcept
+// Polynomial edge window attenuating discontinuity aliasing near phase wraps.
+inline double aaWindow (double dist, double inc, double mult) noexcept
 {
-    const double t = triangle (p), cusp = t * t * t;
-    if (shape < 0.5)
-        return t + 2.0 * std::max (0.0, shape) * (cusp - t);
-    const double a = 2.0 * (std::min (1.0, shape) - 0.5);
-    return (1.0 - a) * cusp + a * 0.9 * sine (0.43 * t);
+    const double a = sat (-mult * std::abs (inc));
+    const double b = sat (3.0 * a);
+    const double c = sat (2.5 * b + 0.09375);
+    const double slope = sat (1.0 + 0.3125 * a + 0.6875 * b);
+    return sat (1.0 + c + dist * (16.0 * slope + 1.0));
 }
 
-// [measured, black box] A triangle times a gain of 2 to 1.375, wrapped at
-// the rails.
-inline double triangleMod (double p, double offset) noexcept
+inline double hfComp (double inc) noexcept
 {
-    double y = mapping::triangleModGain (offset) * triangle (p);
-    if (y > 1.0)
-        y -= 2.0;
-    else if (y < -1.0)
-        y += 2.0;
-    return y;
+    return sat (0.125 + 2.0 * inc * inc) * 4.0;
+}
+
+// OSC 1 Saw: cubic shape warp with anti-aliased edge window and HF lift.
+inline double shapedSawHardware (double p, double inc, double s) noexcept
+{
+    const double win = aaWindow (1.0 - std::abs (p), inc, 4.0);
+    const double poly = sat ((1.5 - 4.0 * s) * p + (4.0 * s - 1.0) * p * p * p);
+    return sat (sat (poly * win) * hfComp (inc)) * (23.0 / 32.0);
+}
+
+// Normalised saw waveform over unit phase [0, 1) for offline harmonic checks.
+inline double shapedSaw (double unitP, double shape) noexcept
+{
+    const double p = 2.0 * unitP - 1.0;
+    const double s = mapping::waveShape (shape);
+    const double inc = 2.0 * 100.0 / kEngineRate;
+    return shapedSawHardware (p, inc, s) / (23.0 / 32.0) * 2.0;
+}
+
+// OSC 1 Triangle: cubic phase skew followed by a Chebyshev T3 wavefolder.
+inline double shapedTriangleHardware (double p, double s) noexcept
+{
+    const double u = 0.5 * p + 0.5;
+    const double w = (1.0 - s) * u + s * u * u * u;
+    const double t = 2.0 * std::abs (2.0 * w - 1.0) - 1.0;
+    const double y = sat (t + 4.0 * s * (t * t * t - t));
+    return y * (1.0 - 0.5 * s) * (39.0 / 128.0);
+}
+
+// Three-stage anti-aliased variable pulse shaper with DC removal.
+inline double pulseHardware (double p, double inc, double pw) noexcept
+{
+    const double tri = 1.0 - 2.0 * std::abs (p);
+    const double aInc = std::abs (inc);
+    const double dc = sat (2.0 * aInc);
+    const double dcOff = pw * sat (1.0 - dc * dc);
+    const double raw = sat (tri + dcOff);
+
+    const double a1 = sat (-4.0 * aInc);
+    const double w1 = sat (a1 + 1.0);
+    const double a2 = sat (4.0 * a1);
+    const double w2 = sat (a2 + 1.0);
+    const double a3 = sat (4.0 * a2);
+    const double w3 = sat (a3 + 1.0);
+
+    const double pulse = sat (raw + 4.0 * raw * w1 + 4.0 * sat (4.0 * raw) * w2
+                              + (raw >= 0.0 ? 1.0 : -1.0) * w3);
+    return (pulse - dcOff) * (19.0 / 128.0);
+}
+
+// OSC 1 Triangle Mod: wrapped high-gain triangle with anti-aliased fold window.
+inline double triangleModHardware (double p, double inc, double off) noexcept
+{
+    const double tri = 1.0 - 2.0 * std::abs (p);
+    const double wrapped = wrap2 (tri * (1.125 + off));
+    const double win = aaWindow (1.0 - std::abs (wrapped), inc, 8.0);
+    return wrapped * win * (20.0 / 128.0);
+}
+
+inline double osc2SawHardware (double p, double inc) noexcept
+{
+    const double win = aaWindow (1.0 - std::abs (p), inc, 4.0);
+    return sat (sat (0.5 * p * win) * hfComp (inc));
+}
+
+inline double osc2TriangleHardware (double p) noexcept
+{
+    return 0.625 * (std::abs (p) - 0.5);
+}
+
+inline double syncSawHardware (double p1, double inc1, double inc2, double ratio) noexcept
+{
+    const double win1 = aaWindow (1.0 - std::abs (p1), inc1, 4.0);
+    const double p2 = wrap2 (ratio * (p1 + 1.0) - 1.0);
+    const double win2 = aaWindow (1.0 - std::abs (p2), inc2, 4.0);
+    return sat (sat (0.5 * p2 * win2) * hfComp (inc2) * win1);
+}
+
+inline double syncTriangleHardware (double p1, double inc1, double ratio) noexcept
+{
+    const double win1 = aaWindow (1.0 - std::abs (p1), inc1, 4.0);
+    const double p2a = wrap2 (ratio * (p1 + 1.0) - 1.0);
+    const double p2b = wrap2 (-ratio * (1.0 - p1) - 1.0);
+    const double tA = std::abs (p2a) - 0.5;
+    const double tB = std::abs (p2b) - 0.5;
+    return 0.625 * sat ((tA - tB) * win1 + tB);
+}
+
+inline double syncPulseHardware (double p1, double inc1, double inc2, double ratio, double pw) noexcept
+{
+    const double win1 = aaWindow (1.0 - std::abs (p1), inc1, 4.0);
+    const double p2 = wrap2 (ratio * (p1 + 1.0) - 1.0);
+    return pulseHardware (p2, inc2, pw) * win1;
 }
 } // namespace osc
 
 class SuperSaw
 {
 public:
-    // Szabo 2010: the seven phases are unrelated at every note-on.
     void trigger (Random& random) noexcept
     {
         for (auto& phase : phase_)
             phase = random.next();
-        highPass_.reset();
-        highPass2_.reset();
+        low1_ = band1_ = low2_ = band2_ = 0.0;
+        fresh_ = true;
     }
 
     void configure (double hz, double detune, double mix) noexcept
     {
-        if (detune != detune_ || mix != mix_)
+        hz_ = std::max (hz, 1.0);
+        detuneTarget_ = mapping::superDetuneReg (detune);
+        mixTarget_ = mapping::superMixSide (mix);
+        if (fresh_)
         {
-            detune_ = detune;
-            mix_ = mix;
-            amount_ = mapping::superDetune (detune);
-            centre_ = mapping::superCentre (mix);
-            side_ = mapping::superSide (mix);
+            detuneCur_ = detuneTarget_;
+            mixCur_ = mixTarget_;
+            fresh_ = false;
         }
-        // [measured at DETUNE 0] each side saw is the centre's integer step
-        // plus a floored product, as an arithmetic shift leaves it.
-        const double centre = std::floor (std::clamp (hz / kEngineRate, 0.0, 0.499) * 16777216.0);
-        for (std::size_t i = 0; i < step_.size(); ++i)
-        {
-            const double steps = std::min (8388607.0, centre + std::floor (centre * mapping::superOffsets[i] * amount_));
-            step_[i] = static_cast<std::uint32_t> (static_cast<std::int32_t> (steps)) << 8;
-        }
-        // [measured] two identical 12 dB high-passes, from amplitude and
-        // phase of a recorded JP-8080. [inferred] that they track every key
-        // at the same ratio: the recording is one note.
-        highPass_.configure (hz * mapping::superHighPassRatio, 1.0 / mapping::superHighPassQ);
-        highPass2_.configure (hz * mapping::superHighPassRatio, 1.0 / mapping::superHighPassQ);
+        updateSteps (detuneCur_);
     }
 
     double process() noexcept
     {
+        constexpr double smoothAlpha = 1.0 / 512.0;
+        detuneCur_ += smoothAlpha * (detuneTarget_ - detuneCur_);
+        mixCur_ += smoothAlpha * (mixTarget_ - mixCur_);
+        if (std::abs (detuneTarget_ - detuneCur_) > 1.0e-9)
+            updateSteps (detuneCur_);
+
         double centre = 0.0, sides = 0.0;
         for (std::size_t i = 0; i < phase_.size(); ++i)
         {
             const std::uint32_t before = phase_[i];
             phase_[i] += step_[i];
-            const double saw = 2.0 * osc::unitPhase (phase_[i]) - 1.0;
+            const double saw = osc::bipolarPhase (phase_[i]);
             if (i == 3)
             {
                 centre = saw;
                 wrapped_ = phase_[i] < before;
             }
             else
+            {
                 sides += saw;
+            }
         }
-        // [measured, black box] Level against the saw: 1.4 dB under the old
-        // 0.58 across MIX 0-127 (JE-8086, every Szabo point).
-        return 0.494 * highPass2_.process (highPass_.process (centre_ * centre + side_ * sides).high).high;
+
+        const double atten = 1.0 - sat (2.1875 * mixCur_);
+        const double hpIn = sat (0.1953125 * centre + mixCur_ * sides) * 2.0 * atten;
+
+        const double inc = std::clamp (2.0 * hz_ / kEngineRate, 1.0e-5, 0.99);
+        const double f = std::min (0.99, 1.53125 * inc);
+
+        low1_ = sat (low1_ + f * band1_);
+        const double high1 = sat (0.5 * hpIn - sat (low1_ + band1_));
+        band1_ = sat (band1_ + 2.0 * f * high1);
+
+        low2_ = sat (low2_ + 2.0 * f * band2_);
+        const double high2 = sat (0.3125 * high1 - sat (low2_ + band2_));
+        band2_ = sat (band2_ + 2.0 * f * high2);
+
+        return sat (1.8125 * high2);
     }
 
     bool wrapped() const noexcept { return wrapped_; }
+    double centrePhase() const noexcept { return osc::bipolarPhase (phase_[3]); }
 
-    // A saw's speed against the centre one, in steps of the 24-bit phase.
     int stepsFromCentre (int saw) const noexcept
     {
         return static_cast<std::int32_t> (step_[static_cast<std::size_t> (saw)] - step_[3]) / 256;
     }
 
 private:
+    void updateSteps (double detuneReg) noexcept
+    {
+        const double centre = std::floor (std::clamp (hz_ / kEngineRate, 0.0, 0.499) * 16777216.0);
+        const double baseDetune = std::floor (centre * detuneReg);
+        for (std::size_t i = 0; i < step_.size(); ++i)
+        {
+            const double steps = std::min (8388607.0,
+                                           centre + std::floor (baseDetune * mapping::superDetuneMultipliers[i]));
+            step_[i] = static_cast<std::uint32_t> (static_cast<std::int32_t> (steps)) << 8;
+        }
+    }
+
     std::array<std::uint32_t, 7> phase_ {}, step_ {};
-    double detune_ { -1.0 }, mix_ { -1.0 };
-    double amount_ { 0.0 }, centre_ { 1.0 }, side_ { 0.0 };
-    Svf highPass_, highPass2_;
-    bool wrapped_ { false };
+    double hz_ { 440.0 };
+    double detuneCur_ { 0.0 }, detuneTarget_ { 0.0 };
+    double mixCur_ { 0.0 }, mixTarget_ { 0.0 };
+    double low1_ { 0.0 }, band1_ { 0.0 }, low2_ { 0.0 }, band2_ { 0.0 };
+    bool wrapped_ { false }, fresh_ { true };
 };
 
 class NoiseOsc
 {
 public:
-    void reset() noexcept { filter_.reset(); }
+    void reset() noexcept
+    {
+        low1_ = band1_ = low2_ = band2_ = 0.0;
+        fresh_ = true;
+    }
 
-    // [measured] The main filter's -24 dB low-pass on white noise, its
-    // cutoff following the key (mapping::noiseCoefficient), RESONANCE on the
-    // main filter's table. Level against the saw: see noiseLevel.
     void configure (double hz, double cutoff, double resonance) noexcept
     {
-        filter_.configure (mapping::noiseCoefficient (hz, cutoff), resonance, FilterType::LowPass, true);
-        // [measured] The level stays within 1 dB from RESONANCE 0 to 112,
-        // where the filter's own output (gain q) would rise 8-10 dB.
-        const double q = mapping::resonanceQ (resonance);
-        gain_ = noiseLevel * std::pow (q / mapping::resonanceQ (0.0), 0.33);
+        fTarget_ = mapping::noiseCoefficient (hz, cutoff);
+        qHalfTarget_ = mapping::noiseResonanceQHalf (resonance, fTarget_);
+        if (fresh_)
+        {
+            f_ = fTarget_;
+            qHalf_ = qHalfTarget_;
+            fresh_ = false;
+        }
     }
 
     double process (Random& random) noexcept
     {
-        return gain_ * filter_.process (random.bipolarValue());
+        constexpr double smoothAlpha = 1.0 / 512.0;
+        f_ += smoothAlpha * (fTarget_ - f_);
+        qHalf_ += smoothAlpha * (qHalfTarget_ - qHalf_);
+        const double q = 2.0 * qHalf_;
+
+        const double n = random.bipolarValue();
+        const double x1 = sat (n * (qHalf_ + 1.0 / 1024.0));
+        low1_ = sat (low1_ + f_ * band1_);
+        const double h1 = sat (x1 - sat (low1_ + q * band1_));
+        band1_ = sat (band1_ + f_ * h1);
+
+        const double x2 = sat (0.835 * low1_);
+        low2_ = sat (low2_ + f_ * band2_);
+        const double h2 = sat (x2 - sat (low2_ + q * band2_));
+        band2_ = sat (band2_ + f_ * h2);
+
+        return sat (low2_ * 2.0 * sat (sat (4.75 * qHalf_) + 0.1797)) * 0.46875;
     }
 
-    static constexpr double noiseLevel = 0.831; // -1.6 dB against the first fit
-
 private:
-    Filter filter_;
-    double gain_ { noiseLevel };
+    double f_ { 0.02 }, fTarget_ { 0.02 };
+    double qHalf_ { 0.5 }, qHalfTarget_ { 0.5 };
+    double low1_ { 0.0 }, band1_ { 0.0 }, low2_ { 0.0 }, band2_ { 0.0 };
+    bool fresh_ { true };
 };
 
-// [inferred mechanism] OM p.56 says only that it resembles guitar feedback,
-// that AMOUNT sets the level of the harmonics and HARMONICS their sound.
-// Like a string in front of an amplifier: a saw drives a limited loop about
-// one period long, so it rings near harmonics of the note, and a band-pass
-// in the loop picks which one. It blooms after each attack and howls above
-// unity gain.
+// Two-tap fractional comb feedback oscillator without a separate resonant filter.
 class FeedbackOsc
 {
 public:
@@ -228,58 +291,66 @@ public:
     {
         buffer_.fill (0.0f);
         write_ = 0;
-        band_.reset();
-        bloom_ = 0.0;
-        delay_ = 0.0;
+        dc_ = 0.0;
+        fresh_ = true;
     }
 
-    void retrigger() noexcept { bloom_ = 0.0; }
+    void retrigger() noexcept {}
 
     void configure (double hz, double harmonics, double amount) noexcept
     {
-        target_ = std::clamp (kEngineRate / std::max (1.0, hz) - mapping::feedbackLoopShortfall,
-                              2.0, static_cast<double> (size - 3));
-        if (delay_ == 0.0)
-            delay_ = target_;
-        // The band-pass sits on the loop's own mode, so it picks the mode
-        // without pulling the howl back onto the note's harmonic.
-        const double mode = mapping::feedbackHarmonic (harmonics) * kEngineRate / target_;
-        band_.configure (std::clamp (mode, 10.0, 18000.0), damping);
-        bloom_ += onePole (0.8, kControlRate) * (1.0 - bloom_);
-        amount_ = amount;
-        // [measured, black box] JE-8086 howls from AMOUNT 16 and is near full
-        // strength by 48 (the howl is within 1 dB of AMOUNT 127 from 56).
-        loopGain_ = 1.8 * std::min (1.0, 2.6 * amount) * (0.45 + 0.55 * bloom_);
+        d1Target_ = std::clamp (kEngineRate / std::max (hz, 15.0), 2.0, static_cast<double> (size - 3));
+        hTarget_ = mapping::feedbackHarmonics (harmonics);
+        amtTarget_ = mapping::feedbackAmount (amount);
+        if (fresh_)
+        {
+            d1_ = d1Target_;
+            h_ = hTarget_;
+            amt_ = amtTarget_;
+            fresh_ = false;
+        }
     }
 
-    double process (double saw) noexcept
+    double process (double rawSawPhase) noexcept
     {
-        delay_ += 0.01 * (target_ - delay_);
-        const double position = static_cast<double> (write_) - delay_ + size;
-        const int index = static_cast<int> (position);
-        const double fraction = position - index;
-        const double a = buffer_[static_cast<std::size_t> (index & mask)];
-        const double b = buffer_[static_cast<std::size_t> ((index + 1) & mask)];
-        const double fed = damping * band_.process (a + fraction * (b - a)).band;
-        const double loop = softClip (0.015 * amount_ * saw + loopGain_ * fed);
-        buffer_[static_cast<std::size_t> (write_)] = static_cast<float> (loop);
+        d1_ += (1.0 / 128.0) * (d1Target_ - d1_);
+        h_ += (1.0 / 512.0) * (hTarget_ - h_);
+        amt_ += (1.0 / 512.0) * (amtTarget_ - amt_);
+
+        const double d2 = std::max (1.0, d1_ * (0.5 + h_));
+        const double tap1 = 2.0 * readLerp (d1_);
+        const double tap2 = 2.0 * readLerp (d2);
+
+        const double loop = sat (0.546875 * rawSawPhase + 0.3125 * tap1 + (51.0 / 64.0) * amt_ * tap2);
+        const double hp = sat (0.998046875 * loop + dc_);
+        dc_ = sat (dc_ - 0.00390625 * hp);
+
+        buffer_[static_cast<std::size_t> (write_)] = static_cast<float> (0.65625 * hp);
         write_ = (write_ + 1) & mask;
-        return saw * (0.8 - 0.62 * amount_) + 0.95 * std::min (1.0, 1.9 * amount_) * loop;
+        return 0.359375 * hp;
     }
 
 private:
+    double readLerp (double delaySamples) const noexcept
+    {
+        const double pos = static_cast<double> (write_) - delaySamples + size;
+        const int idx = static_cast<int> (pos);
+        const double frac = pos - idx;
+        const double a = buffer_[static_cast<std::size_t> (idx & mask)];
+        const double b = buffer_[static_cast<std::size_t> ((idx + 1) & mask)];
+        return a + frac * (b - a);
+    }
+
     static constexpr int size = 8192, mask = size - 1;
-    static constexpr double damping = 0.5; // [inferred] selects one mode of the loop
     std::array<float, size> buffer_ {};
     int write_ { 0 };
-    Svf band_;
-    double bloom_ { 0.0 }, amount_ { 0.0 }, loopGain_ { 0.0 };
-    double delay_ { 0.0 }, target_ { 100.0 };
+    double d1_ { 100.0 }, d1Target_ { 100.0 };
+    double h_ { 0.0 }, hTarget_ { 0.0 };
+    double amt_ { 0.0 }, amtTarget_ { 0.0 };
+    double dc_ { 0.0 };
+    bool fresh_ { true };
 };
 
-// OSC 1, OSC 2 and the three functions between them, wired as OM p.59:
-// X-MOD runs from 2 to 1, SYNC from 1 to 2, and RING takes OSC 2's place
-// in the balance.
 class OscillatorPair
 {
 public:
@@ -298,11 +369,13 @@ public:
         super_.trigger (random);
         if (fresh)
         {
-            phase1_ = random.next();
-            phase2_ = random.next();
+            p1_ = osc::bipolarPhase (random.next());
+            p2_ = osc::bipolarPhase (random.next());
             last2_ = 0.0;
+            dc_ = 0.0;
             noise_.reset();
-            feedbackReady_ = false;
+            feedback_.reset();
+            freshSmooth_ = true;
         }
         if (wave == Wave1::FeedbackOsc)
             feedback_.retrigger();
@@ -311,68 +384,93 @@ public:
     void configure (const Controls& c) noexcept
     {
         c_ = c;
-        step1_ = osc::increment (c.hz1);
-        step2_ = osc::increment (c.hz2);
+        inc1_ = std::clamp (2.0 * c.hz1 / kEngineRate, -0.998, 0.998);
+        inc2_ = std::clamp (2.0 * c.hz2 / kEngineRate, -0.998, 0.998);
         if (c.wave1 == Wave1::SuperSaw)
             super_.configure (c.hz1, c.ctrl1, c.ctrl2);
         else if (c.wave1 == Wave1::Noise)
             noise_.configure (c.hz1, c.ctrl1, c.ctrl2);
         else if (c.wave1 == Wave1::FeedbackOsc)
-        {
-            if (! feedbackReady_)
-                feedback_.reset();
-            feedbackReady_ = true;
             feedback_.configure (c.hz1, c.ctrl1, c.ctrl2);
+
+        shapeTarget_ = c.wave1 == Wave1::TriangleMod ? mapping::triangleModOffset (c.ctrl1)
+                     : c.wave1 == Wave1::Square      ? mapping::pulseWidth (c.ctrl1)
+                                                     : mapping::waveShape (c.ctrl1);
+        pw2Target_ = mapping::pulseWidth (c.width2);
+        balTarget_ = std::clamp (c.gain2, 0.0, 1.0);
+        if (freshSmooth_)
+        {
+            shape_ = shapeTarget_;
+            pw2_ = pw2Target_;
+            bal_ = balTarget_;
+            freshSmooth_ = false;
         }
-        // [measured] Linear, through-zero FM in Hz, independent of either pitch.
-        fmDepth_ = mapping::crossModHz (c.xmod);
-        // OM p.58: no cross modulation with SUPER SAW or NOISE.
+
+        fmGain_ = mapping::crossModGain (c.xmod);
         fm_ = c.xmod > 0.0 && c.wave1 != Wave1::SuperSaw && c.wave1 != Wave1::Noise;
     }
 
     double process (Random& random) noexcept
     {
-        // [measured, black box] Levels against the plain saw (0.8 here):
-        // pulse 0.82, triangle 1.60, triangle mod 0.86.
+        shape_ += (1.0 / 2048.0) * (shapeTarget_ - shape_);
+        pw2_ += (1.0 / 2048.0) * (pw2Target_ - pw2_);
+        bal_ += (1.0 / 64.0) * (balTarget_ - bal_);
+
         double first = 0.0;
-        bool wrapped;
+        double masterPhase = 0.0;
+        const double inc1Eff = fm_ ? std::clamp (inc1_ + fmGain_ * last2_, -0.998, 0.998) : inc1_;
+
         if (c_.wave1 == Wave1::SuperSaw)
         {
             first = super_.process();
-            wrapped = super_.wrapped();
+            masterPhase = super_.centrePhase();
         }
         else
         {
-            const std::uint32_t before = phase1_;
-            const std::uint32_t step = fm_ ? osc::increment (c_.hz1 + fmDepth_ * last2_) : step1_;
-            phase1_ += step;
-            wrapped = static_cast<std::int32_t> (step) >= 0 && phase1_ < before;
-            const double p = osc::unitPhase (phase1_);
+            p1_ = wrap2 (p1_ + inc1Eff);
+            masterPhase = p1_;
             switch (c_.wave1)
             {
                 case Wave1::SuperSaw: break;
-                case Wave1::TriangleMod: first = 0.685 * osc::triangleMod (p, c_.ctrl1); break;
+                case Wave1::TriangleMod: first = osc::triangleModHardware (p1_, inc1Eff, shape_); break;
                 case Wave1::Noise: first = noise_.process (random); break;
-                case Wave1::FeedbackOsc: first = feedback_.process (2.0 * p - 1.0); break;
-                case Wave1::Square: first = 0.66 * osc::square (p, c_.ctrl1); break;
-                case Wave1::Saw: first = 0.8 * osc::shapedSaw (p, c_.ctrl1); break;
-                case Wave1::Triangle: first = 1.28 * osc::shapedTriangle (p, c_.ctrl1); break;
+                case Wave1::FeedbackOsc: first = feedback_.process (p1_); break;
+                case Wave1::Square: first = osc::pulseHardware (p1_, inc1Eff, shape_); break;
+                case Wave1::Saw: first = osc::shapedSawHardware (p1_, inc1Eff, shape_); break;
+                case Wave1::Triangle: first = osc::shapedTriangleHardware (p1_, shape_); break;
             }
         }
 
-        // [inferred] SYNC resets on the sample, with no sub-sample correction.
-        phase2_ = c_.sync && wrapped ? 0u : phase2_ + step2_;
-        const double p2 = osc::unitPhase (phase2_);
         double second = 0.0;
-        switch (c_.wave2)
+        if (c_.sync)
         {
-            case Wave2::Square: second = osc::square (p2, c_.width2); last2_ = second; second *= 0.66; break;
-            case Wave2::Saw: second = 2.0 * p2 - 1.0; last2_ = second; second *= 0.8; break;
-            case Wave2::Triangle: second = osc::triangle (p2); last2_ = second; second *= 1.28; break;
+            const double ratio = c_.hz2 / std::max (c_.hz1, 1.0);
+            switch (c_.wave2)
+            {
+                case Wave2::Square:   second = osc::syncPulseHardware (masterPhase, inc1Eff, inc2_, ratio, pw2_); break;
+                case Wave2::Saw:      second = osc::syncSawHardware (masterPhase, inc1Eff, inc2_, ratio); break;
+                case Wave2::Triangle: second = osc::syncTriangleHardware (masterPhase, inc1Eff, ratio); break;
+            }
         }
+        else
+        {
+            p2_ = wrap2 (p2_ + inc2_);
+            switch (c_.wave2)
+            {
+                case Wave2::Square:   second = osc::pulseHardware (p2_, inc2_, pw2_); break;
+                case Wave2::Saw:      second = osc::osc2SawHardware (p2_, inc2_); break;
+                case Wave2::Triangle: second = osc::osc2TriangleHardware (p2_); break;
+            }
+        }
+        last2_ = c_.wave2 == Wave2::Triangle ? (second * 1.6) : second;
+
         if (c_.ring)
-            second *= 1.06 * first; // [measured] level of the JE-8086 ring (tri and saw)
-        return c_.gain1 * first + c_.gain2 * second;
+            second = sat (4.0 * first * second);
+
+        const double mix = (1.0 - bal_) * first + bal_ * second;
+        const double y = sat (mix + dc_);
+        dc_ = sat (dc_ - 0.00048828125 * y);
+        return y;
     }
 
 private:
@@ -380,8 +478,11 @@ private:
     SuperSaw super_;
     NoiseOsc noise_;
     FeedbackOsc feedback_;
-    std::uint32_t phase1_ { 0 }, phase2_ { 0 }, step1_ { 0 }, step2_ { 0 };
-    double last2_ { 0.0 }, fmDepth_ { 0.0 };
-    bool fm_ { false }, feedbackReady_ { false };
+    double p1_ { 0.0 }, p2_ { 0.0 }, inc1_ { 0.0 }, inc2_ { 0.0 };
+    double shape_ { 0.0 }, shapeTarget_ { 0.0 };
+    double pw2_ { 0.0 }, pw2Target_ { 0.0 };
+    double bal_ { 0.0 }, balTarget_ { 0.0 };
+    double last2_ { 0.0 }, fmGain_ { 0.0 }, dc_ { 0.0 };
+    bool fm_ { false }, freshSmooth_ { true };
 };
 } // namespace hypra

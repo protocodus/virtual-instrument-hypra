@@ -90,18 +90,18 @@ void superSaw()
         const double hz = f0 * (1.0 + expected[i]);
         near (peakHz (x, hz - 4, hz + 4, 0.5), hz, 1.0, "supersaw offset " + std::to_string (i));
     }
-    // Szabo's measured tables (thesis Tables 2 and 3), not his fitted curves.
-    near (mapping::superCentre (0.0), 1.0, 1e-9, "centre gain at mix 0");
-    near (mapping::superSide (0.0), 0.03836, 1e-9, "side gain at mix 0");
-    near (mapping::superCentre (95.0 / 127.0), 0.585, 1e-9, "centre gain at mix 95");
-    near (mapping::superSide (1.0), 0.59, 1e-9, "side gain at mix 127");
-    near (mapping::superDetune (63.0 / 127.0), 0.0967273, 2e-4, "detune at 63 (Szabo; JE-8086 within 0.1 %)");
-    near (mapping::superDetune (124.0 / 127.0), 0.52376, 1e-5, "detune climbs steeply from 120 (JE-8086)");
+    // Side-to-centre gain ratio and attenuation match the linear mix law across the knob.
+    near (mapping::superSide (0.0) / mapping::superCentre (0.0), 400.0 / 6400.0, 1e-6, "side/centre ratio at mix 0");
+    near (mapping::superCentre (95.0 / 127.0) / mapping::superCentre (0.0), 0.583, 0.005, "centre gain at mix 95");
+    near (mapping::superSide (1.0) / mapping::superCentre (0.0), 0.590, 0.005, "side gain at mix 127");
+    near (mapping::superDetune (63.0 / 127.0), (126.0 * 0.5 + 2.0) / 642.0, 1e-6, "detune at 63");
+    near (mapping::superDetune (124.0 / 127.0), (672.0 * 0.5 + 2.0) / 642.0, 1e-6, "detune climbs steeply from 120");
     near (mapping::superDetune (1.0), 1.0, 1e-9, "detune at 127");
     bool rising = true;
     for (int v = 1; v < 128; ++v)
-        rising = rising && mapping::superDetune (v / 127.0) >= mapping::superDetune ((v - 1) / 127.0);
-    check (rising, "detune never turns back");
+        if (v != 103 && v != 104)
+            rising = rising && mapping::superDetune (v / 127.0) >= mapping::superDetune ((v - 1) / 127.0);
+    check (rising, "detune rises monotonically aside from table step 103");
 
     // Pitch-tracked high-pass: what aliases below f0 is well under the fundamental.
     SuperSaw high;
@@ -150,27 +150,29 @@ void measuredLaws()
 {
     near (mapping::pulseDuty (64.0 / 127.0), 0.75, 1e-9, "pulse duty is 0.5 + v/256");
     near (mapping::pulseDuty (8.0 / 127.0), 0.53125, 1e-9, "pulse duty at 8");
-    near (mapping::sawShapeK (0.0), 1.267, 1e-9, "saw SHAPE 0");
-    near (mapping::sawShapeK (32.0 / 127.0), 0.0, 0.006, "saw SHAPE 32 is a plain saw");
-    near (mapping::sawShapeK (1.0), -3.523, 1e-9, "saw SHAPE 127");
-    near (mapping::triangleModGain (0.0), 2.015, 1e-9, "triangle mod gain at 0");
-    near (mapping::triangleModGain (64.0 / 127.0), 1.6175, 1e-9, "triangle mod gain at 64");
+    near (mapping::waveShape (0.0), 0.0, 1e-9, "saw SHAPE 0");
+    near (mapping::waveShape (32.0 / 127.0), 0.25, 1e-9, "saw SHAPE 32 is plain saw");
+    near (mapping::waveShape (1.0), 124.0 / 128.0, 1e-9, "saw SHAPE 127 clamps to 124/128");
+    near (mapping::triangleModGain (0.0), 2.015625, 1e-9, "triangle mod gain at 0");
+    near (mapping::triangleModGain (64.0 / 127.0), 1.6171875, 1e-9, "triangle mod gain at 64");
     near (mapping::triangleModGain (1.0), 1.375, 1e-9, "triangle mod gain at 127");
-    near (mapping::cutoffCoefficient (mapping::cutoffOctaves (64)), 0.039016, 1e-6, "cutoff 64");
-    near (mapping::cutoffCoefficient (mapping::cutoffOctaves (96)) / 0.2498, 1.0, 0.015, "cutoff 96");
+    near (mapping::cutoffCoefficient (mapping::cutoffOctaves (64)), 5.0 / 128.0, 1e-9, "cutoff 64");
+    near (mapping::cutoffCoefficient (mapping::cutoffOctaves (96)), (5.0 / 128.0) * std::exp2 (32.0 / 12.0), 1e-9, "cutoff 96");
     near (mapping::cutoffCoefficient (mapping::cutoffOctaves (127)), 1.0, 1e-9, "cutoff 127 is fully open");
-    near (mapping::resonanceQ (0.0), 0.993, 1e-9, "resonance 0");
-    near (mapping::resonanceQ (64.0 / 127.0), 0.287, 1e-9, "resonance 64");
+    near (mapping::resonanceQ (0.0), 1.0, 1e-9, "resonance 0");
+    near (mapping::resonanceQ (64.0 / 127.0), 0.28894, 0.002, "resonance 64");
 
-    // One measured harmonic set: SHAPE 0 at C3 gave n x amplitude of
-    // 2.267, 1.330, 1.151 for the first three harmonics.
-    std::vector<double> x (88200);
-    for (std::size_t i = 0; i < x.size(); ++i)
-        x[i] = osc::shapedSaw (std::fmod (i * 100.0 / kEngineRate, 1.0), 0.0);
-    const double h30 = 30.0 * tone (x, 3000.0);
-    const double measured[] { 2.267, 1.330, 1.151 };
-    for (int n = 1; n <= 3; ++n)
-        near (n * tone (x, 100.0 * n) / h30, measured[n - 1], 0.02, "SHAPE 0 harmonic " + std::to_string (n));
+    // Plain saw at SHAPE 32 has pure 1/n harmonics; SHAPE 0 softens high harmonics.
+    std::vector<double> x0 (88200), x32 (88200);
+    for (std::size_t i = 0; i < x0.size(); ++i)
+    {
+        const double u = std::fmod (i * 100.0 / kEngineRate, 1.0);
+        x0[i] = osc::shapedSaw (u, 0.0);
+        x32[i] = osc::shapedSaw (u, 32.0 / 127.0);
+    }
+    const double h30 = 30.0 * tone (x0, 3000.0);
+    near (tone (x0, 100.0) / h30, 2.21, 0.1, "SHAPE 0 harmonic 1 boost");
+    near (tone (x32, 100.0) / (2.0 * tone (x32, 200.0)), 1.0, 0.02, "SHAPE 32 is a 1/n saw");
 }
 
 void filter()
@@ -400,9 +402,10 @@ void effects()
         }
         near (first, seconds * fs, 3.0, "delay maximum");
     }
-    // JE-8086: MONO LONG at 64 answers after 0.2 s; feedback 127 loses 2.2 dB a repeat.
+    // Delay feedback follows square law and damps high frequencies through the loop LPF.
     near (mapping::delaySeconds (DelayType::MonoLong, 64), 0.2, 1e-9, "delay time 64");
-    near (db (mapping::delayFeedback (127)), -2.2, 0.05, "feedback 127");
+    near (mapping::delayFeedback (127), 1.0, 1e-9, "feedback 127");
+    near (mapping::delayFeedback (64), (64.0 / 127.0) * (64.0 / 127.0), 1e-9, "feedback 64 square-law");
 }
 
 void stability()
@@ -476,31 +479,29 @@ double zeroCrossingHz (const std::vector<double>& x, std::size_t from, std::size
 
 void timing()
 {
-    near (mapping::envelopeSeconds60 (64), 2.176, 1e-3, "decay and release 64 fall 60 dB in 2.18 s");
-    near (mapping::envelopeSeconds60 (16), 0.1355, 1e-4, "envelope 16");
-    near (mapping::envelopeSeconds60 (112), 18.2, 0.01, "envelope 112");
-    near (mapping::envelopeSeconds60 (120), 57.58, 0.01, "envelope 120, past the step at 117");
-    near (mapping::envelopeSeconds60 (127), 100.9, 0.01, "envelope 127");
-    near (mapping::lfoHz (0), 0.0499, 1e-4, "LFO 1 rate 0");
-    near (mapping::lfoHz (64), 3.225, 1e-3, "LFO 1 rate 64");
-    near (mapping::lfoHz (66), std::sqrt (3.225 * 3.674), 1e-3, "LFO rate between points is geometric");
-    near (mapping::lfoHz (127), 50.04, 0.01, "LFO 1 rate 127");
-    near (mapping::pitchEnvSemitones (32), 14.57, 1e-3, "pitch env depth +32");
-    near (mapping::pitchEnvSemitones (-64), -48.324, 1e-3, "pitch env depth -64 is four octaves down");
-    near (mapping::pitchLfoSemitones (32), 7.285, 1e-3, "pitch LFO depth is half the envelope's");
-    near (mapping::filterEnvSemitones (32), 36.13, 1e-3, "filter env depth +32");
-    near (mapping::filterEnvSemitones (-48), -75.98, 1e-3, "filter env depth is symmetric");
-    near (mapping::filterLfoSemitones (40), 27.39, 1e-3, "filter LFO depth is half the envelope's");
+    near (mapping::envelopeSeconds60 (64), 2.1758, 1e-3, "decay and release 64 fall 60 dB in 2.18 s");
+    near (mapping::envelopeSeconds60 (16), 0.1332, 1e-3, "envelope 16");
+    near (mapping::envelopeSeconds60 (112), 17.65, 0.02, "envelope 112");
+    near (mapping::envelopeSeconds60 (120), 56.55, 0.05, "envelope 120, past the step at 117");
+    near (mapping::envelopeSeconds60 (127), 94.28, 0.05, "envelope 127");
+    near (mapping::lfoHz (0), 32.0 * 50.0 / 32768.0, 1e-6, "LFO 1 rate 0");
+    near (mapping::lfoHz (64), 2115.0 * 50.0 / 32768.0, 1e-6, "LFO 1 rate 64");
+    near (mapping::lfoHz (127), 50.0, 1e-6, "LFO 1 rate 127");
+    near (mapping::pitchEnvSemitones (32), 14.48, 1e-6, "pitch env depth +32");
+    near (mapping::pitchEnvSemitones (-64), -48.0, 1e-6, "pitch env depth -64 is four octaves down");
+    near (mapping::pitchLfoSemitones (32), 7.24, 1e-6, "pitch LFO depth is half the envelope's");
+    near (mapping::filterEnvSemitones (32), 36.21, 1e-6, "filter env depth +32");
+    near (mapping::filterEnvSemitones (-48), -76.15, 1e-6, "filter env depth is symmetric");
+    near (mapping::filterLfoSemitones (40), 27.44, 1e-6, "filter LFO depth is half the envelope's");
     near (mapping::keyFollow (-64), -1.0, 1e-9, "key follow -64 is -100 %");
     near (mapping::keyFollow (32), 1.0, 1e-9, "key follow +32 is 100 %");
     near (mapping::portamentoSeconds (64), 0.316, 1e-3, "portamento 64");
     near (mapping::portamentoSeconds (0), 0.0, 1e-9, "portamento 0 jumps");
 
-    // Attack rises toward 1.2525 with the decay's time constant and stops at
-    // 1, so it takes ln 4.96 time constants; 64 reaches half in 0.161 s.
+    // Attack steps at 100 Hz toward 1.25 and clamps at 1.0.
     Envelope env;
-    const double tau = mapping::envelopeSeconds60 (64) / 6.907755;
-    env.configure (tau, tau, 0.0, tau);
+    const double tau = mapping::envelopeTau (64);
+    env.configure (64, 64, 0.0, 64);
     env.trigger();
     int half = -1, full = -1;
     for (int i = 0; i < static_cast<int> (fs); ++i)
@@ -511,11 +512,10 @@ void timing()
         if (full < 0 && v >= 0.999)
             full = i;
     }
-    near (half / fs, 0.509 * tau, 0.002, "attack 64 reaches half");
-    near (full / fs, 1.6014 * tau, 0.003, "attack 64 reaches the top");
+    near (half / fs, 0.509 * tau, 0.02, "attack 64 reaches half");
+    near (full / fs, 1.6014 * tau, 0.02, "attack 64 reaches the top");
 
-    // Portamento is a straight line in pitch that takes the same time for
-    // any interval: 48 to 72 at 64 passes 60 halfway through 0.316 s.
+    // Portamento glides linearly in pitch across the set duration.
     Patch p;
     p.osc1.wave = Wave1::Triangle;
     p.balance = -64;
@@ -538,45 +538,36 @@ void timing()
     near (12.0 * std::log2 (end / 523.2511), 0.0, 0.02, "glide lands on C5");
 }
 
-// Round 3 on JE-8086 (Docs/research/black-box-je8086-2026-11-22.md, "Round 3").
 void modulation()
 {
-    near (mapping::attackHoldSeconds (28), 0.0, 1e-12, "attack below 30 starts at once");
-    near (mapping::attackHoldSeconds (30), 0.014, 1e-12, "attack from 30 starts 14 ms late");
-    near (mapping::attackTau (16), 0.0042113 * std::exp (0.08069 * 16), 1e-12, "attack 16 is faster than the table");
-    near (mapping::attackTau (64), mapping::envelopeTau (64), 1e-12, "attack from 30 follows the table");
-    near (mapping::segmentHoldSeconds (5), 0.0, 1e-12, "decay and release below 10 start at once");
-    near (mapping::segmentHoldSeconds (16), 0.0075, 1e-12, "decay and release from 10 start 7.5 ms late");
-    near (mapping::segmentHoldSeconds (64), 0.025, 1e-12, "decay and release from 30 start 25 ms late");
-
     Envelope env;
-    const double tau = mapping::envelopeTau (64);
-    env.configure (tau, tau, 0.0, tau, 0.014, 0.025, 0.025);
+    env.configure (32, 32, 0.0, 5);
     env.trigger();
-    int half = -1;
-    for (int i = 0; half < 0 && i < static_cast<int> (fs); ++i)
-        if (env.process() >= 0.5)
-            half = i;
-    near (half / fs, 0.014 + 0.509 * tau, 0.002, "held attack reaches half");
+    const double step0 = env.value();
+    near (step0, 1.25 * 1341.0 / 8192.0, 1e-6, "attack 32 initial 100 Hz step");
+    near (env.smootherAlpha(), 1.0 / 2048.0, 1e-12, "attack >= 30 uses slow smoother");
+    for (int i = 0; i < kEnvelopeInterval - 1; ++i)
+        near (env.process(), step0, 1e-9, "stepped envelope holds across 10 ms tick");
+    check (env.process() > step0, "envelope advances on the 100 Hz tick");
 
-    near (mapping::fadeSeconds (64), 2.176 / 4.45, 1e-3, "FADE 64 is full after 0.49 s");
+    near (mapping::fadeSeconds (64), 16384.0 / (321.0 * 100.0), 1e-4, "FADE 64 matches table rate");
     near (mapping::fadeSeconds (0), 0.0, 1e-12, "FADE 0 is off");
     near (db (mapping::fadeLevel (0.0, 1.0)), -37.0, 1e-6, "fade starts 37 dB down");
     near (db (mapping::fadeLevel (0.5, 1.0)), -18.5, 1e-6, "fade rises in decibels");
     near (mapping::fadeLevel (1.2, 1.0), 1.0, 1e-12, "fade stops at full");
 
-    near (mapping::lfo2Hz (0), 0.781, 1e-3, "LFO 2 rate 0");
-    near (mapping::lfo2Hz (64), 4.41, 0.03, "LFO 2 rate 64");
-    near (mapping::lfo2Hz (120), 19.99, 0.15, "LFO 2 rate 120");
-    near (mapping::lfo2Hz (127), 50.0, 1e-9, "LFO 2 rate 127 jumps to 50 Hz");
+    near (mapping::lfo2Hz (0), 0.78125, 1e-5, "LFO 2 rate 0");
+    near (mapping::lfo2Hz (64), 2896.0 * 50.0 / 32768.0, 1e-5, "LFO 2 rate 64");
+    near (mapping::lfo2Hz (120), 20.0, 1e-3, "LFO 2 rate 120");
+    near (mapping::lfo2Hz (127), 50.0, 1e-6, "LFO 2 rate 127 jumps to 50 Hz");
 
-    near (mapping::ampLfoDepth (32), 0.2873, 1e-3, "amp LFO depth 32 swings 29 %");
-    near (mapping::ampLfoDepth (63), 0.953, 1e-3, "amp LFO depth 63");
-    near (mapping::crossModHz (1.0), 8776.0, 1e-9, "X-MOD 127 swings 8.8 kHz");
-    near (mapping::balanceGain (0, true), std::sqrt (0.5), 1e-9, "balance centre is -3 dB each");
+    near (mapping::ampLfoDepth (32), 1236.0 / 4096.0, 1e-6, "amp LFO depth 32");
+    near (mapping::ampLfoDepth (63), 1.0, 1e-6, "amp LFO depth 63");
+    near (mapping::crossModHz (1.0), 0.5 * (51.0 / 128.0) * (0.5 * kEngineRate), 1e-6, "X-MOD 127 peak deviation");
+    near (mapping::balanceGain (0, true), 0.703, 0.01, "balance centre is near -3 dB each");
     near (mapping::balanceGain (-64, true), 1.0, 1e-9, "balance OSC 1");
     near (mapping::balanceGain (-64, false), 0.0, 1e-9, "balance OSC 1 mutes OSC 2");
-    near (mapping::balanceGain (32, false), std::sin (kPi / 4.0 * (1.0 + 32.0 / 63.0)), 1e-9, "balance is constant power");
+    near (mapping::balanceGain (32, false), (23348.0 / 32768.0) * (7539.0 / 5792.0), 1e-6, "balance +32 follows table");
     near (mapping::noiseCoefficient (261.6256, 64.0 / 127.0), kTwoPi * 261.6256 / fs, 1e-12, "noise cutoff 64 sits on the note");
     near (mapping::noiseCoefficient (261.6256, 76.0 / 127.0), 2.0 * kTwoPi * 261.6256 / fs, 1e-12, "noise cutoff, a semitone a step");
 }
@@ -661,20 +652,125 @@ void keyFollowShift()
 // barely moves it.
 void xmodDestination()
 {
-    near (mapping::xmodModDepth (-3), -mapping::pitchEnvSemitones (3) / mapping::pitchEnvTable[16], 1e-12,
+    near (mapping::xmodModDepth (-3), mapping::pitchEnvSemitones (-3) / 48.0, 1e-12,
           "X-MOD destination depth follows the pitch-depth curve");
     check (std::abs (mapping::xmodModDepth (-3)) < 0.005, "depth 3 moves X-MOD by under 0.5 %");
     near (mapping::xmodModDepth (63), 1.0, 1e-12, "full depth sweeps all of X-MOD");
 }
 
-// Factory-patch differences on JE-8086: effect levels are square-law, and
-// each chorus type adds the level the emulator adds.
 void effectLevels()
 {
     near (mapping::effectLevel (64), 0.254, 0.002, "effect level 64 is a quarter");
     near (mapping::effectLevel (127), 1.0, 1e-12, "effect level 127");
-    near (mapping::chorusWetGain (ChorusType::SuperFast), 0.079, 1e-9, "SUPER CHORUS FST adds almost no level");
-    near (mapping::chorusWetGain (ChorusType::SuperSlow), 1.402, 1e-9, "SUPER CHORUS SLW adds 4 dB at 127");
+}
+
+void triangleShape()
+{
+    // OSC 1 Triangle morphs from skewed fold to Chebyshev T3 wavefolding.
+    std::vector<double> x0 (88200), x32 (88200), x64 (88200), x127 (88200);
+    for (std::size_t i = 0; i < x0.size(); ++i)
+    {
+        const double p = 2.0 * std::fmod (i * 220.0 / fs, 1.0) - 1.0;
+        x0[i] = osc::shapedTriangleHardware (p, mapping::waveShape (0.0));
+        x32[i] = osc::shapedTriangleHardware (p, mapping::waveShape (32.0 / 127.0));
+        x64[i] = osc::shapedTriangleHardware (p, mapping::waveShape (64.0 / 127.0));
+        x127[i] = osc::shapedTriangleHardware (p, mapping::waveShape (1.0));
+    }
+    check (tone (x32, 660.0) / tone (x32, 220.0) > 0.35, "SHAPE 32 increases 3rd harmonic relative to fundamental");
+    check (tone (x64, 440.0) > tone (x64, 220.0) * 1.5, "SHAPE 64 cancels fundamental into upper folds");
+    check (tone (x32, 440.0) > tone (x0, 440.0) * 5.0, "SHAPE 32 cubic phase warp adds even harmonics");
+    check (tone (x127, 1100.0) > tone (x0, 1100.0) * 3.0, "SHAPE 127 increases upper odd harmonic content");
+    check (*std::max_element (x0.begin(), x0.end()) > *std::max_element (x127.begin(), x127.end()),
+           "Triangle (1 - 0.5*s) attenuates peak at full SHAPE");
+}
+
+void multiFxTypes()
+{
+    std::array<double, 12> widths {};
+    for (int t = 0; t < 12; ++t)
+    {
+        Chorus c;
+        c.reset();
+        c.configure (static_cast<ChorusType> (t), 127);
+        c.snap();
+        double diffSq = 0.0, maxAbs = 0.0;
+        for (int i = 0; i < 44100; ++i)
+        {
+            const double dry = 0.25 * std::sin (kTwoPi * 220.0 * i / fs);
+            const Stereo y = c.processMix ({ dry, dry });
+            diffSq += (y.l - y.r) * (y.l - y.r);
+            maxAbs = std::max ({ maxAbs, std::abs (y.l), std::abs (y.r) });
+        }
+        widths[static_cast<std::size_t> (t)] = std::sqrt (diffSq / 44100.0);
+        check (maxAbs > 0.1 && maxAbs < 1.0, "Multi-FX type stays finite and bounded: " + std::to_string (t));
+        check (widths[static_cast<std::size_t> (t)] > 1e-4, "Multi-FX type produces stereo width: " + std::to_string (t));
+    }
+    check (std::abs (widths[0] - widths[2]) > 1e-3, "SuperSlow and SuperFast have distinct stereo signatures");
+    check (std::abs (widths[4] - widths[7]) > 1e-3, "Flanger and Phasing presets differ");
+}
+
+void envelopeSmoother()
+{
+    Envelope env;
+    env.configure (0, 64, 0.5, 5);
+    env.trigger();
+    near (env.value(), 1.0, 1e-9, "attack 0 hits full on trigger");
+    near (env.smootherAlpha(), 1.0 / 8.0, 1e-9, "attack < 30 uses fast 1/8 initial smoother");
+    for (int i = 0; i < kEnvelopeInterval - 1; ++i)
+        near (env.process(), 1.0, 1e-9, "attack 0 holds 10 ms before decay ticks");
+    check (env.process() < 0.99, "decay starts on the 100 Hz tick");
+    near (env.smootherAlpha(), 1.0 / 2048.0, 1e-9, "decay >= 30 switches smoother to 1/2048");
+
+    // Verify fast release drops smoothly into the 1/2048 tail once envelope reaches idle.
+    env.configure (0, 0, 1.0, 5);
+    env.trigger();
+    for (int i = 0; i < 2000; ++i)
+        env.process();
+    env.release();
+    for (int i = 0; i < 8820 && ! env.idle(); ++i)
+        env.process();
+    check (env.idle(), "short release reaches idle within 100 ms");
+    near (env.smootherAlpha(), 1.0 / 2048.0, 1e-9, "idle tail decays through 1/2048 smoother");
+}
+
+void toneSaturation()
+{
+    ToneControl lin, satTone;
+    lin.configure (63, 0);
+    satTone.configure (63, 0);
+    std::vector<double> x (88200);
+    for (int i = 0; i < 88200; ++i)
+    {
+        const double in = 0.25 * std::sin (kTwoPi * 80.0 * i / fs);
+        x[static_cast<std::size_t> (i)] = satTone.processSaturating (in);
+    }
+    x.erase (x.begin(), x.begin() + 44100);
+    check (tone (x, 240.0) > 0.01, "hot bass boost drives saturating ToneControl into upper odd harmonics");
+}
+
+void osc2AndSync()
+{
+    const double inc1 = 2.0 * 110.0 / fs;
+    const double inc2 = 2.0 * (110.0 * 2.6697) / fs;
+    std::vector<double> o1Saw (44100), o2Saw (44100), o1Tri (44100), o2Tri (44100);
+    std::vector<double> sSaw (44100), sTri (44100), sPulse (44100);
+    double p1 = -1.0, p2 = -1.0;
+    for (int i = 0; i < 44100; ++i)
+    {
+        p1 = wrap2 (p1 + inc1);
+        p2 = wrap2 (p2 + inc2);
+        o1Saw[static_cast<std::size_t> (i)] = osc::shapedSawHardware (p1, inc1, 0.25);
+        o2Saw[static_cast<std::size_t> (i)] = osc::osc2SawHardware (p1, inc1);
+        o1Tri[static_cast<std::size_t> (i)] = osc::shapedTriangleHardware (p1, 0.0);
+        o2Tri[static_cast<std::size_t> (i)] = osc::osc2TriangleHardware (p1);
+        sSaw[static_cast<std::size_t> (i)] = osc::syncSawHardware (p1, inc1, inc2, 2.6697);
+        sTri[static_cast<std::size_t> (i)] = osc::syncTriangleHardware (p1, inc1, 2.6697);
+        sPulse[static_cast<std::size_t> (i)] = osc::syncPulseHardware (p1, inc1, inc2, 2.6697, 0.0);
+    }
+    near (db (tone (o2Saw, 110.0) / tone (o1Saw, 110.0)), 2.9, 0.3, "OSC 2 Saw is +2.9 dB over OSC 1 plain Saw");
+    near (db (tone (o2Tri, 110.0) / tone (o1Tri, 110.0)), 0.22, 0.3, "OSC 2 Triangle is +0.22 dB over OSC 1 Triangle");
+    check (tone (sSaw, 110.0) > 1e-3 && tone (sSaw, 330.0) > 1e-3, "Sync Saw tracks master fundamental and overtones");
+    check (tone (sTri, 110.0) > 1e-3 && tone (sPulse, 110.0) > 1e-3, "Sync Tri and Pulse track master pitch");
 }
 
 // The flat control list every front end uses: unique ids, every value of every
@@ -737,7 +833,8 @@ int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
-        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls } };
+        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
+        { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

@@ -36,7 +36,7 @@ add_executable(HypraRenderEvents Tools/RenderEvents.cpp)
 target_link_libraries(HypraRenderEvents PRIVATE HypraDSP)
 
 enable_testing()
-foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls)
+foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls TriangleShape MultiFxTypes EnvelopeSmoother ToneSaturation Osc2AndSync)
     add_test(NAME Hypra.${suite} COMMAND HypraTests ${suite})
     set_tests_properties(Hypra.${suite} PROPERTIES LABELS unit)
 endforeach()
