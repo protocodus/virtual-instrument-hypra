@@ -5,9 +5,29 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace trancera
 {
+#if defined(__clang__) || defined(__GNUC__)
+#define TRANCERA_FORCE_INLINE __attribute__((always_inline)) inline
+TRANCERA_FORCE_INLINE double fastAbs (double x) noexcept { return __builtin_fabs (x); }
+TRANCERA_FORCE_INLINE double fastFloor (double x) noexcept { return __builtin_floor (x); }
+TRANCERA_FORCE_INLINE double fastSqrt (double x) noexcept
+{
+#if defined(__has_builtin) && __has_builtin(__builtin_elementwise_sqrt)
+    return __builtin_elementwise_sqrt (x);
+#else
+    return __builtin_sqrt (x);
+#endif
+}
+#else
+#define TRANCERA_FORCE_INLINE inline
+inline double fastAbs (double x) noexcept { return std::abs (x); }
+inline double fastFloor (double x) noexcept { return std::floor (x); }
+inline double fastSqrt (double x) noexcept { return std::sqrt (x); }
+#endif
+
 inline constexpr double kPi = 3.14159265358979323846;
 inline constexpr double kTwoPi = 2.0 * kPi;
 
@@ -43,17 +63,113 @@ struct Double2
     typedef double Lanes __attribute__((vector_size (16)));
     Lanes v;
 
+    static constexpr Double2 zero() noexcept { return { { 0.0, 0.0 } }; }
+    static constexpr Double2 splat (double x) noexcept { return { { x, x } }; }
     static constexpr Double2 make (double l, double r) noexcept { return { { l, r } }; }
     double operator[] (int lane) const noexcept { return v[lane]; }
+    friend Double2 operator+ (Double2 a, Double2 b) noexcept { return { a.v + b.v }; }
+    friend Double2 operator- (Double2 a, Double2 b) noexcept { return { a.v - b.v }; }
+    friend Double2 operator* (double k, Double2 a) noexcept { return { k * a.v }; }
+    Double2& operator+= (Double2 b) noexcept { v += b.v; return *this; }
+    static TRANCERA_FORCE_INLINE Double2 mulAdd (Double2 addend, double k, Double2 x) noexcept { return { addend.v + k * x.v }; }
+    static TRANCERA_FORCE_INLINE Double2 mulSub (Double2 minuend, double k, Double2 x) noexcept { return { minuend.v - k * x.v }; }
 } __attribute__((packed, aligned (8)));
 static_assert (alignof (Double2) == 8 && sizeof (Double2) == 16, "unaligned 128-bit SIMD vector");
+
+struct Int32x4
+{
+    typedef std::int32_t Lanes __attribute__((vector_size (16)));
+    Lanes v;
+
+    static constexpr Int32x4 zero() noexcept { return { { 0, 0, 0, 0 } }; }
+    static constexpr Int32x4 splat (std::int32_t x) noexcept { return { { x, x, x, x } }; }
+    static constexpr Int32x4 make (std::int32_t a, std::int32_t b, std::int32_t c, std::int32_t d) noexcept
+    {
+        return { { a, b, c, d } };
+    }
+    std::int32_t operator[] (int lane) const noexcept { return v[lane]; }
+    friend Int32x4 operator+ (Int32x4 a, Int32x4 b) noexcept { return { a.v + b.v }; }
+    friend Int32x4 operator- (Int32x4 a) noexcept { return { -a.v }; }
+    friend Int32x4 operator- (Int32x4 a, Int32x4 b) noexcept { return { a.v - b.v }; }
+    friend Int32x4 operator* (Int32x4 a, Int32x4 b) noexcept { return { a.v * b.v }; }
+    friend Int32x4 operator>> (Int32x4 a, int s) noexcept { return { a.v >> s }; }
+    friend Int32x4 operator& (Int32x4 a, Int32x4 b) noexcept { return { a.v & b.v }; }
+} __attribute__((packed, aligned (8)));
+static_assert (alignof (Int32x4) == 8 && sizeof (Int32x4) == 16, "unaligned 128-bit SIMD vector");
+
+struct Float4
+{
+    typedef float Lanes __attribute__((vector_size (16)));
+    Lanes v;
+
+    static constexpr Float4 zero() noexcept { return { { 0.0f, 0.0f, 0.0f, 0.0f } }; }
+    static constexpr Float4 splat (float x) noexcept { return { { x, x, x, x } }; }
+    static constexpr Float4 make (float a, float b, float c, float d) noexcept { return { { a, b, c, d } }; }
+    static TRANCERA_FORCE_INLINE Float4 load (const float* ptr) noexcept
+    {
+        Lanes r;
+        std::memcpy (&r, ptr, sizeof (r));
+        return { r };
+    }
+    float operator[] (int lane) const noexcept { return v[lane]; }
+    friend Float4 operator+ (Float4 a, Float4 b) noexcept { return { a.v + b.v }; }
+    friend Float4 operator* (Float4 a, Float4 b) noexcept { return { a.v * b.v }; }
+    Float4& operator+= (Float4 b) noexcept { v += b.v; return *this; }
+    static TRANCERA_FORCE_INLINE Float4 mulAdd (Float4 addend, Float4 a, Float4 b) noexcept { return { addend.v + a.v * b.v }; }
+} __attribute__((packed, aligned (8)));
+static_assert (alignof (Float4) == 8 && sizeof (Float4) == 16, "unaligned 128-bit SIMD vector");
 #else
 struct Double2
 {
     double v[2];
 
+    static constexpr Double2 zero() noexcept { return { { 0.0, 0.0 } }; }
+    static constexpr Double2 splat (double x) noexcept { return { { x, x } }; }
     static constexpr Double2 make (double l, double r) noexcept { return { { l, r } }; }
     double operator[] (int lane) const noexcept { return v[lane]; }
+    friend Double2 operator+ (Double2 a, Double2 b) noexcept { return make (a[0] + b[0], a[1] + b[1]); }
+    friend Double2 operator- (Double2 a, Double2 b) noexcept { return make (a[0] - b[0], a[1] - b[1]); }
+    friend Double2 operator* (double k, Double2 a) noexcept { return make (k * a[0], k * a[1]); }
+    Double2& operator+= (Double2 b) noexcept { v[0] += b[0]; v[1] += b[1]; return *this; }
+    static inline Double2 mulAdd (Double2 addend, double k, Double2 x) noexcept { return make (addend[0] + k * x[0], addend[1] + k * x[1]); }
+    static inline Double2 mulSub (Double2 minuend, double k, Double2 x) noexcept { return make (minuend[0] - k * x[0], minuend[1] - k * x[1]); }
+};
+
+struct Int32x4
+{
+    std::int32_t v[4];
+
+    static constexpr Int32x4 zero() noexcept { return { { 0, 0, 0, 0 } }; }
+    static constexpr Int32x4 splat (std::int32_t x) noexcept { return { { x, x, x, x } }; }
+    static constexpr Int32x4 make (std::int32_t a, std::int32_t b, std::int32_t c, std::int32_t d) noexcept
+    {
+        return { { a, b, c, d } };
+    }
+    std::int32_t operator[] (int lane) const noexcept { return v[lane]; }
+    friend Int32x4 operator+ (Int32x4 a, Int32x4 b) noexcept { return make (a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]); }
+    friend Int32x4 operator- (Int32x4 a) noexcept { return make (-a[0], -a[1], -a[2], -a[3]); }
+    friend Int32x4 operator- (Int32x4 a, Int32x4 b) noexcept { return make (a[0] - b[0], a[1] - b[1], a[2] - b[2], a[3] - b[3]); }
+    friend Int32x4 operator* (Int32x4 a, Int32x4 b) noexcept { return make (a[0] * b[0], a[1] * b[1], a[2] * b[2], a[3] * b[3]); }
+    friend Int32x4 operator>> (Int32x4 a, int s) noexcept { return make (a[0] >> s, a[1] >> s, a[2] >> s, a[3] >> s); }
+    friend Int32x4 operator& (Int32x4 a, Int32x4 b) noexcept { return make (a[0] & b[0], a[1] & b[1], a[2] & b[2], a[3] & b[3]); }
+};
+
+struct Float4
+{
+    float v[4];
+
+    static constexpr Float4 zero() noexcept { return { { 0.0f, 0.0f, 0.0f, 0.0f } }; }
+    static constexpr Float4 splat (float x) noexcept { return { { x, x, x, x } }; }
+    static constexpr Float4 make (float a, float b, float c, float d) noexcept { return { { a, b, c, d } }; }
+    static inline Float4 load (const float* ptr) noexcept { return make (ptr[0], ptr[1], ptr[2], ptr[3]); }
+    float operator[] (int lane) const noexcept { return v[lane]; }
+    friend Float4 operator+ (Float4 a, Float4 b) noexcept { return make (a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]); }
+    friend Float4 operator* (Float4 a, Float4 b) noexcept { return make (a[0] * b[0], a[1] * b[1], a[2] * b[2], a[3] * b[3]); }
+    Float4& operator+= (Float4 b) noexcept { for (int i = 0; i < 4; ++i) v[i] += b[i]; return *this; }
+    static inline Float4 mulAdd (Float4 addend, Float4 a, Float4 b) noexcept
+    {
+        return make (addend[0] + a[0] * b[0], addend[1] + a[1] * b[1], addend[2] + a[2] * b[2], addend[3] + a[3] * b[3]);
+    }
 };
 #endif
 
@@ -201,21 +317,68 @@ inline constexpr Q23 mulImmediate15 (Q23 a, std::int32_t hi8, std::int32_t lo7, 
 inline constexpr std::uint16_t packDelay16 (Q23 v) noexcept
 {
     v = sat24 (v);
-    for (unsigned exponent = 0; exponent < 3; ++exponent)
-    {
-        const std::int32_t mantissa = v >> (4 + 2 * static_cast<int> (exponent));
-        if (mantissa >= -8192 && mantissa <= 8191)
-            return static_cast<std::uint16_t> ((static_cast<std::uint32_t> (mantissa) & 0x3FFFu) | (exponent << 14));
-    }
+    if (static_cast<std::uint32_t> (v + 131072) < 262144u)
+        return static_cast<std::uint16_t> (static_cast<std::uint32_t> (v >> 4) & 0x3FFFu);
+    if (static_cast<std::uint32_t> (v + 524288) < 1048576u)
+        return static_cast<std::uint16_t> ((static_cast<std::uint32_t> (v >> 6) & 0x3FFFu) | 0x4000u);
+    if (static_cast<std::uint32_t> (v + 2097152) < 4194304u)
+        return static_cast<std::uint16_t> ((static_cast<std::uint32_t> (v >> 8) & 0x3FFFu) | 0x8000u);
     const std::int32_t mantissa = std::clamp (v >> 10, -8192, 8191);
-    return static_cast<std::uint16_t> ((static_cast<std::uint32_t> (mantissa) & 0x3FFFu) | (3u << 14));
+    return static_cast<std::uint16_t> ((static_cast<std::uint32_t> (mantissa) & 0x3FFFu) | 0xC000u);
 }
 
 inline constexpr Q23 unpackDelay16 (std::uint16_t code) noexcept
 {
     const std::int32_t raw = static_cast<std::int32_t> (code & 0x3FFFu);
-    const std::int32_t mantissa = (raw & 0x2000) != 0 ? (raw - 0x4000) : raw;
+    const std::int32_t mantissa = (raw ^ 0x2000) - 0x2000;
     const int shift = 4 + 2 * static_cast<int> (code >> 14);
-    return static_cast<Q23> (static_cast<std::int64_t> (mantissa) * (1 << shift));
+    return static_cast<Q23> (static_cast<std::uint32_t> (mantissa) << shift);
+}
+
+inline Int32x4 wrap24x4 (Int32x4 x) noexcept
+{
+#if defined(__clang__) || defined(__GNUC__)
+    typedef std::uint32_t ULanes __attribute__((vector_size (16)));
+    ULanes u;
+    std::memcpy (&u, &x.v, sizeof (u));
+    u <<= 8;
+    Int32x4::Lanes s;
+    std::memcpy (&s, &u, sizeof (s));
+    return { s >> 8 };
+#else
+    return Int32x4::make (wrap24 (x[0]), wrap24 (x[1]), wrap24 (x[2]), wrap24 (x[3]));
+#endif
+}
+
+inline Int32x4 sat24x4 (Int32x4 x) noexcept
+{
+#if defined(__clang__) || defined(__GNUC__)
+    const Int32x4::Lanes hi { kQ23Max, kQ23Max, kQ23Max, kQ23Max };
+    const Int32x4::Lanes lo { kQ23Min, kQ23Min, kQ23Min, kQ23Min };
+    const Int32x4::Lanes c = x.v > hi ? hi : x.v;
+    return { c < lo ? lo : c };
+#else
+    return Int32x4::make (sat24 (x[0]), sat24 (x[1]), sat24 (x[2]), sat24 (x[3]));
+#endif
+}
+
+inline Int32x4 mulSplit15x4 (Int32x4 a, Int32x4 hi8, Int32x4 lo7) noexcept
+{
+#if defined(__clang__) || defined(__GNUC__)
+    return { ((a.v * hi8.v) >> 7) + (((a.v >> 7) * lo7.v) >> 7) };
+#else
+    return Int32x4::make (mulSplit15 (a[0], hi8[0], lo7[0]), mulSplit15 (a[1], hi8[1], lo7[1]),
+                          mulSplit15 (a[2], hi8[2], lo7[2]), mulSplit15 (a[3], hi8[3], lo7[3]));
+#endif
+}
+
+inline Int32x4 mulSplit15x2x4 (Int32x4 a, Int32x4 hi8, Int32x4 lo7) noexcept
+{
+#if defined(__clang__) || defined(__GNUC__)
+    return { ((a.v * hi8.v) >> 6) + (((a.v >> 7) * lo7.v) >> 6) };
+#else
+    return Int32x4::make (mulSplit15x2 (a[0], hi8[0], lo7[0]), mulSplit15x2 (a[1], hi8[1], lo7[1]),
+                          mulSplit15x2 (a[2], hi8[2], lo7[2]), mulSplit15x2 (a[3], hi8[3], lo7[3]));
+#endif
 }
 } // namespace trancera

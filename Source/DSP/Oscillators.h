@@ -231,6 +231,7 @@ struct SawWindowCoeffs
     Q23 base { kQ23Max };
     std::int64_t slope { 16LL * kQ23Max + kQ23One };
     Q23 hfComp { kQ23One >> 3 };
+    Q23 linearLimit { kQ23Max };
 };
 
 inline SawWindowCoeffs makeSawWindowCoeffs (Q23 inc, std::int32_t mult) noexcept
@@ -239,14 +240,33 @@ inline SawWindowCoeffs makeSawWindowCoeffs (Q23 inc, std::int32_t mult) noexcept
     const Q23 b = sat24 (static_cast<std::int64_t> (a) * 3);
     const Q23 c = sat24 (((static_cast<std::int64_t> (b) * 5) >> 1) + 786432);
     const Q23 slope = sat24 (kQ23Max + mul8 (a, 10, 5) + mul8 (b, 22, 5));
-    return { kQ23Max + c, static_cast<std::int64_t> (slope) * 16 + kQ23One, hfCompQ23 (inc) };
+    const Q23 base = kQ23Max + c;
+    const std::int64_t slope64 = static_cast<std::int64_t> (slope) * 16 + kQ23One;
+    const std::int64_t need = static_cast<std::int64_t> (kQ23Max) - base;
+    Q23 linearLimit = kQ23Max;
+    if (need > 0 && slope64 > 0)
+    {
+        const std::int64_t minDist = ((need << 23) + slope64 - 1) / slope64 + 1;
+        linearLimit = static_cast<Q23> (std::max<std::int64_t> (-1, static_cast<std::int64_t> (kQ23Max) - minDist));
+    }
+    return { base, slope64, hfCompQ23 (inc), linearLimit };
 }
 
 inline Q23 osc2SawFastQ23 (Q23 p, const SawWindowCoeffs& w) noexcept
 {
-    const Q23 dist = std::max<Q23> (0, kQ23Max - std::abs (p));
-    const Q23 win = sat24 (w.base + ((static_cast<std::int64_t> (dist) * w.slope) >> 23));
-    const Q23 base = sat24 (mulQ23 (p >> 1, win));
+    const std::int32_t ap = p < 0 ? -static_cast<std::int32_t> (p) : p;
+    Q23 base;
+    if (ap <= w.linearLimit)
+    {
+        const Q23 half = p >> 1;
+        base = half - (half > 0 ? 1 : 0);
+    }
+    else
+    {
+        const Q23 dist = kQ23Max > ap ? (kQ23Max - ap) : 0;
+        const Q23 win = sat24 (w.base + ((static_cast<std::int64_t> (dist) * w.slope) >> 23));
+        base = sat24 (mulQ23 (p >> 1, win));
+    }
     return sat24 ((static_cast<std::int64_t> (base) * w.hfComp) >> 21);
 }
 
@@ -373,9 +393,135 @@ public:
         return sat24 (mul8 (high2, 116, 6));
     }
 
+    void processBlockQ23 (Q23* out, int n) noexcept
+    {
+        int i = 0;
+        while (i < n && (detuneMoving_ || mixMoving_))
+            out[i++] = processQ23();
+        if (i >= n)
+            return;
+
+        Int32x4 phLo = Int32x4::make (phase_[0], phase_[1], phase_[2], phase_[3]);
+        Int32x4 phHi = Int32x4::make (phase_[4], phase_[5], phase_[6], 0);
+        const Int32x4 stLo = Int32x4::make (step_[0], step_[1], step_[2], step_[3]);
+        const Int32x4 stHi = Int32x4::make (step_[4], step_[5], step_[6], 0);
+        const Int32x4 mxLo = Int32x4::make (mix8_, mix8_, mix8_, 25);
+        const Int32x4 mxHi = Int32x4::make (mix8_, mix8_, mix8_, 0);
+        const std::int32_t attHi = attenSplit_.hi, attLo = attenSplit_.lo;
+        const std::int32_t fHi = fSplit_.hi, fLo = fSplit_.lo;
+        Q23 low1 = low1_, band1 = band1_, low2 = low2_, band2 = band2_;
+        bool wrapped = wrapped_;
+
+        for (; i < n; ++i)
+        {
+            const Q23 before = phLo[3];
+            phLo = wrap24x4 (phLo + stLo);
+            phHi = wrap24x4 (phHi + stHi);
+            wrapped = phLo[3] < before;
+
+            const Int32x4 wSum = ((phLo * mxLo) >> 7) + ((phHi * mxHi) >> 7);
+            const Q23 sumSat = sat24 (wSum[0] + wSum[1] + wSum[2] + wSum[3]);
+            const Q23 hpIn = sat24 (mulSplit15x2 (sumSat, attHi, attLo));
+
+            low1 = sat24 (low1 + mulSplit15 (band1, fHi, fLo));
+            const Q23 high1 = sat24 ((hpIn >> 1) - sat24 (low1 + band1));
+            band1 = sat24 (band1 + mulSplit15x2 (high1, fHi, fLo));
+
+            low2 = sat24 (low2 + mulSplit15x2 (band2, fHi, fLo));
+            const Q23 high2 = sat24 (mul8 (high1, 20, 6) - sat24 (low2 + band2));
+            band2 = sat24 (band2 + mulSplit15x2 (high2, fHi, fLo));
+
+            out[i] = sat24 (mul8 (high2, 116, 6));
+        }
+
+        phase_[0] = phLo[0]; phase_[1] = phLo[1]; phase_[2] = phLo[2]; phase_[3] = phLo[3];
+        phase_[4] = phHi[0]; phase_[5] = phHi[1]; phase_[6] = phHi[2];
+        low1_ = low1; band1_ = band1; low2_ = low2; band2_ = band2;
+        wrapped_ = wrapped;
+    }
+
     double process() noexcept { return fromQ23 (processQ23()); }
 
     bool wrapped() const noexcept { return wrapped_; }
+    bool isMoving() const noexcept { return detuneMoving_ || mixMoving_; }
+
+    static void process4BlockQ23 (SuperSaw* const s[4], Q23* const out[4], int n) noexcept
+    {
+        if (n <= 0)
+            return;
+
+        Int32x4 ph0 = Int32x4::make (s[0]->phase_[0], s[1]->phase_[0], s[2]->phase_[0], s[3]->phase_[0]);
+        Int32x4 ph1 = Int32x4::make (s[0]->phase_[1], s[1]->phase_[1], s[2]->phase_[1], s[3]->phase_[1]);
+        Int32x4 ph2 = Int32x4::make (s[0]->phase_[2], s[1]->phase_[2], s[2]->phase_[2], s[3]->phase_[2]);
+        Int32x4 ph3 = Int32x4::make (s[0]->phase_[3], s[1]->phase_[3], s[2]->phase_[3], s[3]->phase_[3]);
+        Int32x4 ph4 = Int32x4::make (s[0]->phase_[4], s[1]->phase_[4], s[2]->phase_[4], s[3]->phase_[4]);
+        Int32x4 ph5 = Int32x4::make (s[0]->phase_[5], s[1]->phase_[5], s[2]->phase_[5], s[3]->phase_[5]);
+        Int32x4 ph6 = Int32x4::make (s[0]->phase_[6], s[1]->phase_[6], s[2]->phase_[6], s[3]->phase_[6]);
+
+        const Int32x4 st0 = Int32x4::make (s[0]->step_[0], s[1]->step_[0], s[2]->step_[0], s[3]->step_[0]);
+        const Int32x4 st1 = Int32x4::make (s[0]->step_[1], s[1]->step_[1], s[2]->step_[1], s[3]->step_[1]);
+        const Int32x4 st2 = Int32x4::make (s[0]->step_[2], s[1]->step_[2], s[2]->step_[2], s[3]->step_[2]);
+        const Int32x4 st3 = Int32x4::make (s[0]->step_[3], s[1]->step_[3], s[2]->step_[3], s[3]->step_[3]);
+        const Int32x4 st4 = Int32x4::make (s[0]->step_[4], s[1]->step_[4], s[2]->step_[4], s[3]->step_[4]);
+        const Int32x4 st5 = Int32x4::make (s[0]->step_[5], s[1]->step_[5], s[2]->step_[5], s[3]->step_[5]);
+        const Int32x4 st6 = Int32x4::make (s[0]->step_[6], s[1]->step_[6], s[2]->step_[6], s[3]->step_[6]);
+
+        const Int32x4 mix8 = Int32x4::make (s[0]->mix8_, s[1]->mix8_, s[2]->mix8_, s[3]->mix8_);
+        const Int32x4 attHi = Int32x4::make (s[0]->attenSplit_.hi, s[1]->attenSplit_.hi, s[2]->attenSplit_.hi, s[3]->attenSplit_.hi);
+        const Int32x4 attLo = Int32x4::make (s[0]->attenSplit_.lo, s[1]->attenSplit_.lo, s[2]->attenSplit_.lo, s[3]->attenSplit_.lo);
+        const Int32x4 fHi = Int32x4::make (s[0]->fSplit_.hi, s[1]->fSplit_.hi, s[2]->fSplit_.hi, s[3]->fSplit_.hi);
+        const Int32x4 fLo = Int32x4::make (s[0]->fSplit_.lo, s[1]->fSplit_.lo, s[2]->fSplit_.lo, s[3]->fSplit_.lo);
+
+        Int32x4 low1 = Int32x4::make (s[0]->low1_, s[1]->low1_, s[2]->low1_, s[3]->low1_);
+        Int32x4 band1 = Int32x4::make (s[0]->band1_, s[1]->band1_, s[2]->band1_, s[3]->band1_);
+        Int32x4 low2 = Int32x4::make (s[0]->low2_, s[1]->low2_, s[2]->low2_, s[3]->low2_);
+        Int32x4 band2 = Int32x4::make (s[0]->band2_, s[1]->band2_, s[2]->band2_, s[3]->band2_);
+
+        const Int32x4 c25 = Int32x4::splat (25);
+        const Int32x4 c20 = Int32x4::splat (20);
+        const Int32x4 c116 = Int32x4::splat (116);
+        Q23* const o0 = out[0]; Q23* const o1 = out[1]; Q23* const o2 = out[2]; Q23* const o3 = out[3];
+        Int32x4 before3 = ph3;
+
+        for (int i = 0; i < n; ++i)
+        {
+            before3 = ph3;
+            ph0 = wrap24x4 (ph0 + st0);
+            ph1 = wrap24x4 (ph1 + st1);
+            ph2 = wrap24x4 (ph2 + st2);
+            ph3 = wrap24x4 (ph3 + st3);
+            ph4 = wrap24x4 (ph4 + st4);
+            ph5 = wrap24x4 (ph5 + st5);
+            ph6 = wrap24x4 (ph6 + st6);
+
+            const Int32x4 sides012 = ((ph0 * mix8) >> 7) + ((ph1 * mix8) >> 7) + ((ph2 * mix8) >> 7);
+            const Int32x4 sides456 = ((ph4 * mix8) >> 7) + ((ph5 * mix8) >> 7) + ((ph6 * mix8) >> 7);
+            const Int32x4 sum = ((ph3 * c25) >> 7) + sides012 + sides456;
+            const Int32x4 sumSat = sat24x4 (sum);
+            const Int32x4 hpIn = sat24x4 (mulSplit15x2x4 (sumSat, attHi, attLo));
+
+            low1 = sat24x4 (low1 + mulSplit15x4 (band1, fHi, fLo));
+            const Int32x4 high1 = sat24x4 ((hpIn >> 1) - sat24x4 (low1 + band1));
+            band1 = sat24x4 (band1 + mulSplit15x2x4 (high1, fHi, fLo));
+
+            low2 = sat24x4 (low2 + mulSplit15x2x4 (band2, fHi, fLo));
+            const Int32x4 high2 = sat24x4 (((high1 * c20) >> 6) - sat24x4 (low2 + band2));
+            band2 = sat24x4 (band2 + mulSplit15x2x4 (high2, fHi, fLo));
+
+            const Int32x4 y = sat24x4 ((high2 * c116) >> 6);
+            o0[i] = y[0]; o1[i] = y[1]; o2[i] = y[2]; o3[i] = y[3];
+        }
+
+        for (int k = 0; k < 4; ++k)
+        {
+            s[k]->phase_[0] = ph0[k]; s[k]->phase_[1] = ph1[k]; s[k]->phase_[2] = ph2[k];
+            s[k]->phase_[3] = ph3[k]; s[k]->phase_[4] = ph4[k]; s[k]->phase_[5] = ph5[k];
+            s[k]->phase_[6] = ph6[k];
+            s[k]->low1_ = low1[k]; s[k]->band1_ = band1[k];
+            s[k]->low2_ = low2[k]; s[k]->band2_ = band2[k];
+            s[k]->wrapped_ = ph3[k] < before3[k];
+        }
+    }
     Q23 centrePhaseQ23() const noexcept { return phase_[3]; }
     double centrePhase() const noexcept { return fromQ23 (phase_[3]); }
 
@@ -755,7 +901,266 @@ public:
         return y;
     }
 
+    void processBlockQ23 (Q23* out, int n, Random& random) noexcept
+    {
+        int i = 0;
+        if (shapeMoving_ || pw2Moving_ || balMoving_ || fm_ || c_.sync || c_.ring)
+        {
+            while (i < n && (shapeMoving_ || pw2Moving_ || balMoving_ || fm_ || c_.sync || c_.ring))
+                out[i++] = processQ23 (random);
+            if (i >= n)
+                return;
+        }
+
+        const std::int32_t invHi = invBalSplit_.hi, invLo = invBalSplit_.lo;
+        const Q23 inc1 = inc1_, shape = shape_;
+        const bool osc1Only = bal_ == 0;
+
+        while (i < n)
+        {
+            const int sub = std::min (n - i, 64);
+            Q23 firstBuf[64];
+            if (c_.wave1 == Wave1::SuperSaw)
+            {
+                super_.processBlockQ23 (firstBuf, sub);
+            }
+            else if (c_.wave1 == Wave1::Noise)
+            {
+                for (int k = 0; k < sub; ++k)
+                {
+                    p1_ = wrap24 (p1_ + inc1);
+                    firstBuf[k] = noise_.processQ23 (random);
+                }
+            }
+            else if (c_.wave1 == Wave1::FeedbackOsc)
+            {
+                Q23 p1 = p1_;
+                for (int k = 0; k < sub; ++k)
+                {
+                    p1 = wrap24 (p1 + inc1);
+                    firstBuf[k] = feedback_.processQ23 (p1);
+                }
+                p1_ = p1;
+            }
+            else
+            {
+                Q23 p1 = p1_;
+                switch (c_.wave1)
+                {
+                    case Wave1::Saw:
+                        for (int k = 0; k < sub; ++k) { p1 = wrap24 (p1 + inc1); firstBuf[k] = osc::shapedSawQ23 (p1, inc1, shape); }
+                        break;
+                    case Wave1::Square:
+                        for (int k = 0; k < sub; ++k) { p1 = wrap24 (p1 + inc1); firstBuf[k] = osc::pulseQ23 (p1, inc1, shape); }
+                        break;
+                    case Wave1::Triangle:
+                        for (int k = 0; k < sub; ++k) { p1 = wrap24 (p1 + inc1); firstBuf[k] = osc::shapedTriangleQ23 (p1, shape); }
+                        break;
+                    case Wave1::TriangleMod:
+                        for (int k = 0; k < sub; ++k) { p1 = wrap24 (p1 + inc1); firstBuf[k] = osc::triangleModQ23 (p1, inc1, shape); }
+                        break;
+                    case Wave1::SuperSaw:
+                    case Wave1::Noise:
+                    case Wave1::FeedbackOsc:
+                        break;
+                }
+                p1_ = p1;
+            }
+
+            if (osc1Only)
+            {
+                advanceOsc2Idle (sub);
+                Q23 dc = dc_;
+                for (int k = 0; k < sub; ++k)
+                {
+                    const Q23 mix = sat24 (mulSplit15 (firstBuf[k], invHi, invLo));
+                    const Q23 y = sat24 (mix + dc);
+                    dc = sat24 (dc + mulImmediate15 (y, -1, 120, 7));
+                    out[i + k] = y;
+                }
+                dc_ = dc;
+            }
+            else
+            {
+                mixOsc2Block (firstBuf, out + i, sub);
+            }
+            i += sub;
+        }
+    }
+
+    static bool canProcess4SuperSaw (OscillatorPair* const ops[4]) noexcept
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            const OscillatorPair* const op = ops[k];
+            if (op->c_.wave1 != Wave1::SuperSaw
+                || op->shapeMoving_ || op->pw2Moving_ || op->balMoving_
+                || op->fm_ || op->c_.sync || op->c_.ring || op->super_.isMoving())
+                return false;
+        }
+        return true;
+    }
+
+    static void process4SuperSawBlockQ23 (OscillatorPair* const ops[4], Q23* const out[4], int n) noexcept
+    {
+        const bool allOsc1Only = ops[0]->bal_ == 0 && ops[1]->bal_ == 0
+                                 && ops[2]->bal_ == 0 && ops[3]->bal_ == 0;
+        const bool allWave2Saw = ! allOsc1Only
+                                 && ops[0]->bal_ != 0 && ops[1]->bal_ != 0 && ops[2]->bal_ != 0 && ops[3]->bal_ != 0
+                                 && ops[0]->c_.wave2 == Wave2::Saw && ops[1]->c_.wave2 == Wave2::Saw
+                                 && ops[2]->c_.wave2 == Wave2::Saw && ops[3]->c_.wave2 == Wave2::Saw;
+
+        const Int32x4 invHi = Int32x4::make (ops[0]->invBalSplit_.hi, ops[1]->invBalSplit_.hi, ops[2]->invBalSplit_.hi, ops[3]->invBalSplit_.hi);
+        const Int32x4 invLo = Int32x4::make (ops[0]->invBalSplit_.lo, ops[1]->invBalSplit_.lo, ops[2]->invBalSplit_.lo, ops[3]->invBalSplit_.lo);
+        const Int32x4 balHi = Int32x4::make (ops[0]->balSplit_.hi, ops[1]->balSplit_.hi, ops[2]->balSplit_.hi, ops[3]->balSplit_.hi);
+        const Int32x4 balLo = Int32x4::make (ops[0]->balSplit_.lo, ops[1]->balSplit_.lo, ops[2]->balSplit_.lo, ops[3]->balSplit_.lo);
+        const Int32x4 c120 = Int32x4::splat (120);
+
+        SuperSaw* const supers[4] { &ops[0]->super_, &ops[1]->super_, &ops[2]->super_, &ops[3]->super_ };
+        Q23* const o0 = out[0]; Q23* const o1 = out[1]; Q23* const o2 = out[2]; Q23* const o3 = out[3];
+
+        int i = 0;
+        while (i < n)
+        {
+            const int sub = std::min (n - i, 64);
+            Q23 first[4][64];
+            Q23* const firstPtrs[4] { first[0], first[1], first[2], first[3] };
+            SuperSaw::process4BlockQ23 (supers, firstPtrs, sub);
+
+            if (allOsc1Only)
+            {
+                for (int lane = 0; lane < 4; ++lane)
+                    ops[lane]->advanceOsc2Idle (sub);
+                Int32x4 dc = Int32x4::make (ops[0]->dc_, ops[1]->dc_, ops[2]->dc_, ops[3]->dc_);
+                for (int k = 0; k < sub; ++k)
+                {
+                    const Int32x4 fVec = Int32x4::make (first[0][k], first[1][k], first[2][k], first[3][k]);
+                    const Int32x4 mix = sat24x4 (mulSplit15x4 (fVec, invHi, invLo));
+                    const Int32x4 y = sat24x4 (mix + dc);
+                    dc = sat24x4 (dc + ((-y) >> 7) + (((y >> 7) * c120) >> 7));
+                    o0[i + k] = y[0]; o1[i + k] = y[1]; o2[i + k] = y[2]; o3[i + k] = y[3];
+                }
+                for (int lane = 0; lane < 4; ++lane)
+                    ops[lane]->dc_ = dc[lane];
+            }
+            else if (allWave2Saw)
+            {
+                Int32x4 p2 = Int32x4::make (ops[0]->p2_, ops[1]->p2_, ops[2]->p2_, ops[3]->p2_);
+                const Int32x4 inc2 = Int32x4::make (ops[0]->inc2_, ops[1]->inc2_, ops[2]->inc2_, ops[3]->inc2_);
+                Int32x4 dc = Int32x4::make (ops[0]->dc_, ops[1]->dc_, ops[2]->dc_, ops[3]->dc_);
+                Int32x4 lastSec = Int32x4::zero();
+                for (int k = 0; k < sub; ++k)
+                {
+                    p2 = wrap24x4 (p2 + inc2);
+                    const Int32x4 sec = Int32x4::make (
+                        osc::osc2SawFastQ23 (p2[0], ops[0]->osc2SawWin_),
+                        osc::osc2SawFastQ23 (p2[1], ops[1]->osc2SawWin_),
+                        osc::osc2SawFastQ23 (p2[2], ops[2]->osc2SawWin_),
+                        osc::osc2SawFastQ23 (p2[3], ops[3]->osc2SawWin_));
+                    lastSec = sec;
+                    const Int32x4 fVec = Int32x4::make (first[0][k], first[1][k], first[2][k], first[3][k]);
+                    const Int32x4 mix = sat24x4 (mulSplit15x4 (fVec, invHi, invLo) + mulSplit15x4 (sec, balHi, balLo));
+                    const Int32x4 y = sat24x4 (mix + dc);
+                    dc = sat24x4 (dc + ((-y) >> 7) + (((y >> 7) * c120) >> 7));
+                    o0[i + k] = y[0]; o1[i + k] = y[1]; o2[i + k] = y[2]; o3[i + k] = y[3];
+                }
+                for (int lane = 0; lane < 4; ++lane)
+                {
+                    ops[lane]->p2_ = p2[lane];
+                    ops[lane]->dc_ = dc[lane];
+                    ops[lane]->last2_ = lastSec[lane];
+                }
+            }
+            else
+            {
+                for (int lane = 0; lane < 4; ++lane)
+                    ops[lane]->mixOsc2Block (first[lane], out[lane] + i, sub);
+            }
+            i += sub;
+        }
+    }
+
     double process (Random& random) noexcept { return fromQ23 (processQ23 (random)); }
+
+private:
+    TRANCERA_FORCE_INLINE void advanceOsc2Idle (int sub) noexcept
+    {
+        p2_ = wrap24 (static_cast<std::int32_t> (static_cast<std::int64_t> (p2_)
+                                                + static_cast<std::int64_t> (sub) * inc2_));
+        Q23 second = 0;
+        switch (c_.wave2)
+        {
+            case Wave2::Square:   second = osc::pulseQ23 (p2_, inc2_, pw2_); break;
+            case Wave2::Saw:      second = osc::osc2SawFastQ23 (p2_, osc2SawWin_); break;
+            case Wave2::Triangle: second = osc::osc2TriangleQ23 (p2_); break;
+        }
+        last2_ = c_.wave2 == Wave2::Triangle ? sat24 ((static_cast<std::int64_t> (second) * 8) / 5) : second;
+    }
+
+    TRANCERA_FORCE_INLINE void mixOsc2Block (const Q23* src, Q23* dst, int sub) noexcept
+    {
+        const std::int32_t iHi = invBalSplit_.hi, iLo = invBalSplit_.lo;
+        const std::int32_t bHi = balSplit_.hi, bLo = balSplit_.lo;
+        Q23 dc = dc_;
+        if (bal_ == 0)
+        {
+            advanceOsc2Idle (sub);
+            for (int k = 0; k < sub; ++k)
+            {
+                const Q23 mix = sat24 (mulSplit15 (src[k], iHi, iLo));
+                const Q23 y = sat24 (mix + dc);
+                dc = sat24 (dc + mulImmediate15 (y, -1, 120, 7));
+                dst[k] = y;
+            }
+            dc_ = dc;
+            return;
+        }
+
+        Q23 p2 = p2_;
+        const Q23 inc2 = inc2_;
+        const Q23 pw2 = pw2_;
+        const osc::SawWindowCoeffs& osc2Win = osc2SawWin_;
+        Q23 lastSec = 0;
+        switch (c_.wave2)
+        {
+            case Wave2::Square:
+                for (int k = 0; k < sub; ++k)
+                {
+                    p2 = wrap24 (p2 + inc2);
+                    lastSec = osc::pulseQ23 (p2, inc2, pw2);
+                    const Q23 mix = sat24 (mulSplit15 (src[k], iHi, iLo) + mulSplit15 (lastSec, bHi, bLo));
+                    const Q23 y = sat24 (mix + dc);
+                    dc = sat24 (dc + mulImmediate15 (y, -1, 120, 7));
+                    dst[k] = y;
+                }
+                break;
+            case Wave2::Saw:
+                for (int k = 0; k < sub; ++k)
+                {
+                    p2 = wrap24 (p2 + inc2);
+                    lastSec = osc::osc2SawFastQ23 (p2, osc2Win);
+                    const Q23 mix = sat24 (mulSplit15 (src[k], iHi, iLo) + mulSplit15 (lastSec, bHi, bLo));
+                    const Q23 y = sat24 (mix + dc);
+                    dc = sat24 (dc + mulImmediate15 (y, -1, 120, 7));
+                    dst[k] = y;
+                }
+                break;
+            case Wave2::Triangle:
+                for (int k = 0; k < sub; ++k)
+                {
+                    p2 = wrap24 (p2 + inc2);
+                    lastSec = osc::osc2TriangleQ23 (p2);
+                    const Q23 mix = sat24 (mulSplit15 (src[k], iHi, iLo) + mulSplit15 (lastSec, bHi, bLo));
+                    const Q23 y = sat24 (mix + dc);
+                    dc = sat24 (dc + mulImmediate15 (y, -1, 120, 7));
+                    dst[k] = y;
+                }
+                break;
+        }
+        p2_ = p2;
+        dc_ = dc;
+        last2_ = c_.wave2 == Wave2::Triangle ? sat24 ((static_cast<std::int64_t> (lastSec) * 8) / 5) : lastSec;
+    }
 
 private:
     Controls c_;

@@ -1403,6 +1403,236 @@ void fixedPointAndMatrix()
         check (silentZero && maxDiff > 0.0 && maxDiff < 2.0 / 131072.0,
                "stereo DAC R-2R ladders stay zero on sub-step words and differ slightly across channels");
     }
+
+    {
+        // Bit-exact checks for branchless companding, fast windowing, and SIMD voice/filter blocks.
+        const auto refPack = [] (Q23 v) noexcept -> std::uint16_t
+        {
+            v = sat24 (v);
+            for (unsigned e = 0; e < 3; ++e)
+            {
+                const std::int32_t m = v >> (4 + 2 * static_cast<int> (e));
+                if (m >= -8192 && m <= 8191)
+                    return static_cast<std::uint16_t> ((static_cast<std::uint32_t> (m) & 0x3FFFu) | (e << 14));
+            }
+            const std::int32_t m = std::clamp (v >> 10, -8192, 8191);
+            return static_cast<std::uint16_t> ((static_cast<std::uint32_t> (m) & 0x3FFFu) | (3u << 14));
+        };
+        bool packMatch = true;
+        const std::array<Q23, 7> edgeCenters { kQ23Min, -2097152, -524288, -131072, 131072, 524288, 2097152 };
+        for (Q23 c : edgeCenters)
+            for (int d = -256; d <= 256; ++d)
+                packMatch = packMatch && packDelay16 (sat24 (c + d)) == refPack (sat24 (c + d));
+        for (Q23 v = kQ23Min; v <= kQ23Max - 67; v += 67)
+            packMatch = packMatch && packDelay16 (v) == refPack (v);
+        check (packMatch, "branchless packDelay16 is bit-exact across 24-bit domain");
+
+        bool unpackMatch = true;
+        for (std::uint32_t code = 0; code <= 0xFFFFu; ++code)
+        {
+            const std::int32_t raw = static_cast<std::int32_t> (code & 0x3FFFu);
+            const std::int32_t mantissa = (raw & 0x2000) != 0 ? (raw - 0x4000) : raw;
+            const int shift = 4 + 2 * static_cast<int> (code >> 14);
+            const Q23 refUnpack = static_cast<Q23> (static_cast<std::int64_t> (mantissa) * (1 << shift));
+            if (unpackDelay16 (static_cast<std::uint16_t> (code)) != refUnpack)
+            {
+                unpackMatch = false;
+                break;
+            }
+        }
+        check (unpackMatch, "branchless unpackDelay16 is bit-exact across all 65536 codes");
+
+        bool sawMatch = true;
+        for (double hz : { 55.0, 440.0, 3520.0, 12000.0 })
+        {
+            const Q23 inc = toQ23 (2.0 * hz / fs);
+            const osc::SawWindowCoeffs w = osc::makeSawWindowCoeffs (inc, 4);
+            for (Q23 p : { kQ23Min, kQ23Min + 4096, -1000, -1, 0, 1, 1000, kQ23Max - 4096, kQ23Max })
+                sawMatch = sawMatch && osc::osc2SawFastQ23 (p, w) == osc::osc2SawQ23 (p, inc);
+            Q23 phase = toQ23 (-1.0);
+            for (int i = 0; i < 512; ++i)
+            {
+                phase = wrap24 (phase + inc);
+                sawMatch = sawMatch && osc::osc2SawFastQ23 (phase, w) == osc::osc2SawQ23 (phase, inc);
+            }
+        }
+        check (sawMatch, "osc2SawFastQ23 is bit-exact with full window path");
+
+        SuperSaw ssScalar, ssBlock;
+        Random rA (91u), rB (91u);
+        ssScalar.trigger (rA);
+        ssBlock.trigger (rB);
+        ssScalar.configure (220.0, 0.4, 0.7);
+        ssBlock.configure (220.0, 0.4, 0.7);
+        std::array<Q23, 64> blk {};
+        bool ssMatch = true;
+        for (int b = 0; b < 32; ++b)
+        {
+            if (b == 8)
+            {
+                ssScalar.configure (330.0, 0.9, 0.3);
+                ssBlock.configure (330.0, 0.9, 0.3);
+            }
+            ssBlock.processBlockQ23 (blk.data(), 64);
+            for (int i = 0; i < 64; ++i)
+                ssMatch = ssMatch && blk[static_cast<std::size_t> (i)] == ssScalar.processQ23();
+        }
+        check (ssMatch, "Int32x4 SuperSaw block matches scalar processQ23 bit-for-bit");
+
+        {
+            SuperSaw sScalar[4], sSimd[4];
+            Q23 ssBufs[4][64];
+            SuperSaw* const sPtrs[4] { &sSimd[0], &sSimd[1], &sSimd[2], &sSimd[3] };
+            Q23* const ssOutPtrs[4] { ssBufs[0], ssBufs[1], ssBufs[2], ssBufs[3] };
+            for (int k = 0; k < 4; ++k)
+            {
+                Random rkA (300u + static_cast<std::uint32_t> (k)), rkB (300u + static_cast<std::uint32_t> (k));
+                sScalar[k].trigger (rkA);
+                sSimd[k].trigger (rkB);
+                sScalar[k].configure (110.0 * (1.0 + 0.25 * k), 0.35 + 0.1 * k, 0.65);
+                sSimd[k].configure (110.0 * (1.0 + 0.25 * k), 0.35 + 0.1 * k, 0.65);
+            }
+            bool ss4Match = true;
+            for (int blkIdx = 0; blkIdx < 4; ++blkIdx)
+            {
+                SuperSaw::process4BlockQ23 (sPtrs, ssOutPtrs, 64);
+                for (int k = 0; k < 4; ++k)
+                    for (int i = 0; i < 64; ++i)
+                        ss4Match = ss4Match && ssBufs[k][i] == sScalar[k].processQ23();
+            }
+            check (ss4Match, "Int32x4 4-voice SuperSaw matches scalar processQ23 bit-for-bit");
+        }
+
+        {
+            auto checkOp4Case = [&] (const char* label, const std::array<double, 4>& gains, const std::array<Wave2, 4>& w2s)
+            {
+                OscillatorPair oScalar[4], oSimd[4];
+                Q23 opBufs[4][64];
+                OscillatorPair* const opPtrs[4] { &oSimd[0], &oSimd[1], &oSimd[2], &oSimd[3] };
+                Q23* const opOutPtrs[4] { opBufs[0], opBufs[1], opBufs[2], opBufs[3] };
+                Random rScal (700u), rVec (700u);
+                OscillatorPair::Controls ctrls[4];
+                for (int k = 0; k < 4; ++k)
+                {
+                    oScalar[k].prepare();
+                    oSimd[k].prepare();
+                    Random rsA (701u + static_cast<std::uint32_t> (k)), rsB (701u + static_cast<std::uint32_t> (k));
+                    oScalar[k].trigger (rsA, Wave1::SuperSaw, true);
+                    oSimd[k].trigger (rsB, Wave1::SuperSaw, true);
+                    ctrls[k] = {
+                        Wave1::SuperSaw, w2s[static_cast<std::size_t> (k)],
+                        110.0 * (1.0 + 0.3 * k), 220.0 * (1.0 + 0.3 * k),
+                        0.5, 0.75, 0.35, 0.0,
+                        1.0 - gains[static_cast<std::size_t> (k)], gains[static_cast<std::size_t> (k)],
+                        false, false
+                    };
+                    oScalar[k].configure (ctrls[k]);
+                    oSimd[k].configure (ctrls[k]);
+                }
+                bool match = OscillatorPair::canProcess4SuperSaw (opPtrs);
+                for (int blkIdx = 0; blkIdx < 4; ++blkIdx)
+                {
+                    OscillatorPair::process4SuperSawBlockQ23 (opPtrs, opOutPtrs, 64);
+                    for (int k = 0; k < 4; ++k)
+                        for (int i = 0; i < 64; ++i)
+                            match = match && opBufs[k][i] == oScalar[k].processQ23 (rScal);
+                }
+                for (int k = 0; k < 4; ++k)
+                {
+                    ctrls[k].wave1 = Wave1::Saw;
+                    ctrls[k].xmod = 0.35;
+                    oScalar[k].configure (ctrls[k]);
+                    oSimd[k].configure (ctrls[k]);
+                    for (int s = 0; s < 8; ++s)
+                        match = match && oSimd[k].processQ23 (rVec) == oScalar[k].processQ23 (rScal);
+                }
+                check (match, label);
+            };
+            checkOp4Case ("4-voice SuperSaw OscPair (osc1-only) matches scalar bit-for-bit",
+                          { 0.0, 0.0, 0.0, 0.0 },
+                          { Wave2::Saw, Wave2::Saw, Wave2::Saw, Wave2::Saw });
+            checkOp4Case ("4-voice SuperSaw OscPair (Wave2 Saw) matches scalar bit-for-bit",
+                          { 0.4, 0.5, 0.6, 0.7 },
+                          { Wave2::Saw, Wave2::Saw, Wave2::Saw, Wave2::Saw });
+            checkOp4Case ("4-voice SuperSaw OscPair (mixed Wave2) matches scalar bit-for-bit",
+                          { 0.0, 0.5, 0.5, 0.5 },
+                          { Wave2::Saw, Wave2::Saw, Wave2::Square, Wave2::Triangle });
+        }
+
+        for (FilterType t : { FilterType::LowPass, FilterType::BandPass, FilterType::HighPass })
+        {
+            for (bool steep : { false, true })
+            {
+                Filter fScalar[4], fSimd[4];
+                Q23 bufs[4][64];
+                Filter* const fPtrs[4] { &fSimd[0], &fSimd[1], &fSimd[2], &fSimd[3] };
+                Q23* const bPtrs[4] { bufs[0], bufs[1], bufs[2], bufs[3] };
+                for (int k = 0; k < 4; ++k)
+                {
+                    fScalar[k].configure (0.04 + 0.03 * k, 0.2 * k, t, steep);
+                    fSimd[k].configure (0.04 + 0.03 * k, 0.2 * k, t, steep);
+                    fScalar[k].configure (0.15 + 0.02 * k, 0.1 + 0.2 * k, t, steep);
+                    fSimd[k].configure (0.15 + 0.02 * k, 0.1 + 0.2 * k, t, steep);
+                }
+                bool fltMatch = true;
+                for (int ch = 0; ch < 8; ++ch)
+                {
+                    Q23 refOut[4][64];
+                    for (int k = 0; k < 4; ++k)
+                        for (int i = 0; i < 64; ++i)
+                        {
+                            const Q23 in = toQ23 (0.3 * std::sin (kTwoPi * (110.0 * (k + 1)) * (ch * 64 + i) / fs));
+                            bufs[k][i] = in;
+                            refOut[k][i] = fScalar[k].processQ23 (in);
+                        }
+                    Filter::process4BlockQ23 (fPtrs, bPtrs, 64, t, steep);
+                    for (int k = 0; k < 4; ++k)
+                        for (int i = 0; i < 64; ++i)
+                            fltMatch = fltMatch && bufs[k][i] == refOut[k][i];
+                }
+                check (fltMatch, "Int32x4 4-voice Filter matches scalar processQ23 bit-for-bit");
+            }
+        }
+
+        AnalogOutput aRef, aBlk;
+        aRef.prepare (OutputNode::Rack);
+        aBlk.prepare (OutputNode::Rack);
+        std::array<StereoQ23, 64> words {};
+        std::array<Stereo, 64> outBlk {};
+        for (int i = 0; i < 64; ++i)
+            words[static_cast<std::size_t> (i)] = { toQ23 (0.3 * std::sin (kTwoPi * 440.0 * i / fs)),
+                                                    toQ23 (0.3 * std::cos (kTwoPi * 440.0 * i / fs)) };
+        aBlk.processBlockQ23 (words.data(), outBlk.data(), 64);
+        double maxErr = 0.0;
+        for (int i = 0; i < 64; ++i)
+        {
+            const Stereo y = aRef.processQ23 (words[static_cast<std::size_t> (i)]);
+            maxErr = std::max ({ maxErr, std::abs (outBlk[static_cast<std::size_t> (i)].l - y.l),
+                                         std::abs (outBlk[static_cast<std::size_t> (i)].r - y.r) });
+        }
+        check (maxErr < 1.0e-13, "Double2 AnalogOutput block matches per-sample output");
+
+        // Pre-trigger and post-release true-idle silence check.
+        Engine idleEng;
+        idleEng.prepare (48000.0, 555u);
+        Patch shortPat;
+        shortPat.osc1 = { Wave1::Triangle, 0, 0 };
+        shortPat.balance = -64;
+        shortPat.amp = { 0, 10, 0, 5 };
+        shortPat.lfo1 = { LfoWave::Square, 64, 0 };
+        idleEng.setPatch (Part::Upper, shortPat);
+        std::vector<float> il (48000), ir (48000);
+        idleEng.render (il.data(), ir.data(), 48000);
+        check (std::all_of (il.begin(), il.end(), [] (float v) { return v == 0.0f; })
+               && std::all_of (ir.begin(), ir.end(), [] (float v) { return v == 0.0f; }),
+               "true-idle pre-trigger render emits exact zeros");
+        idleEng.noteOn (60, 100);
+        idleEng.allNotesOff();
+        for (int b = 0; b < 18; ++b)
+            idleEng.render (il.data(), ir.data(), 48000);
+        check (std::all_of (il.end() - 4096, il.end(), [] (float v) { return v == 0.0f; }),
+               "released voice decays into true-idle exact zero");
+    }
 }
 
 int main (int argc, char** argv)

@@ -76,8 +76,37 @@ public:
         const V* evenHead = &even_[downWrite_ + size];
         const V* oddHead = &odd_[downWrite_ + size];
         V y = 0.5 * evenHead[-static_cast<std::ptrdiff_t> (Pairs)];
-        for (std::size_t i = 0; i < Pairs; ++i)
-            y += Taps[i] * (*(oddHead - 1 - i) + *(oddHead - (2 * Pairs - i)));
+        if constexpr (Pairs == 4)
+        {
+            const V t0 = Taps[0] * (*(oddHead - 1) + *(oddHead - 8));
+            const V t1 = Taps[1] * (*(oddHead - 2) + *(oddHead - 7));
+            const V t2 = Taps[2] * (*(oddHead - 3) + *(oddHead - 6));
+            const V t3 = Taps[3] * (*(oddHead - 4) + *(oddHead - 5));
+            y += (t0 + t1) + (t2 + t3);
+        }
+        else if constexpr (Pairs >= 8 && (Pairs % 4) == 0)
+        {
+            V s0 {}, s1 {}, s2 {}, s3 {};
+        #if defined(__clang__)
+        #pragma unroll
+        #endif
+            for (std::size_t i = 0; i < Pairs; i += 4)
+            {
+                s0 += Taps[i]     * (*(oddHead - 1 - i)     + *(oddHead - (2 * Pairs - i)));
+                s1 += Taps[i + 1] * (*(oddHead - 2 - i)     + *(oddHead - (2 * Pairs - 1 - i)));
+                s2 += Taps[i + 2] * (*(oddHead - 3 - i)     + *(oddHead - (2 * Pairs - 2 - i)));
+                s3 += Taps[i + 3] * (*(oddHead - 4 - i)     + *(oddHead - (2 * Pairs - 3 - i)));
+            }
+            y += (s0 + s1) + (s2 + s3);
+        }
+        else
+        {
+        #if defined(__clang__)
+        #pragma unroll
+        #endif
+            for (std::size_t i = 0; i < Pairs; ++i)
+                y += Taps[i] * (*(oddHead - 1 - i) + *(oddHead - (2 * Pairs - i)));
+        }
         downWrite_ = (downWrite_ + 1) & mask;
         return y;
     }
@@ -148,9 +177,15 @@ public:
     V processZeroOrderHold (V heldWord, Circuit&& circuit) noexcept
     {
         std::array<V, 2> outerResults {};
+    #if defined(__clang__)
+    #pragma unroll
+    #endif
         for (std::size_t i = 0; i < 2; ++i)
         {
             std::array<V, 2> middleResults {};
+        #if defined(__clang__)
+        #pragma unroll
+        #endif
             for (std::size_t j = 0; j < 2; ++j)
             {
                 const V first = circuit (heldWord);
@@ -161,6 +196,10 @@ public:
         }
         return outer_.downsample (outerResults[0], outerResults[1]);
     }
+
+    V downsampleInner (V even, V odd) noexcept { return inner_.downsample (even, odd); }
+    V downsampleMiddle (V even, V odd) noexcept { return middle_.downsample (even, odd); }
+    V downsampleOuter (V even, V odd) noexcept { return outer_.downsample (even, odd); }
 
 private:
     HalfBandDown<32, outerTaps, V> outer_;

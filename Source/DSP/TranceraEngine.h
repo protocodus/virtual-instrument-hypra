@@ -95,6 +95,9 @@ private:
 
     struct Span { int first, count; };
 
+    static constexpr int kChunkSize = 64;
+    static constexpr int kIdleTicksThreshold = 131072 + 8192 + 4096;
+
     [[nodiscard]] Span span (int part) const noexcept;
     [[nodiscard]] int partCount() const noexcept { return mode_ == KeyMode::Dual ? 2 : 1; }
     void startPart (int part, int note, int velocity) noexcept;
@@ -103,6 +106,9 @@ private:
     void release (Voice& voice) noexcept;
     void control() noexcept;
     void controlVoice (Voice& voice, int part, bool advanceTick) noexcept;
+    void renderChunk (Stereo* out, int n) noexcept;
+    void renderTicks (Stereo* out, int count) noexcept;
+    void advanceIdleTicks (int ticks) noexcept;
     Stereo tick() noexcept;
 
     std::array<Voice, maxVoices> voices_ {};
@@ -113,8 +119,9 @@ private:
     KeyMode mode_ { KeyMode::Single };
     std::uint32_t seed_ { 8000 };
     std::uint64_t order_ { 0 };
+    double hostRate_ { 44100.0 };
     double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, tune_ { 0.0 };
-    int partDetune_ { 0 }, untilControl_ { kEnvelopeInterval };
-    bool sustain_ { false };
+    int partDetune_ { 0 }, untilControl_ { kEnvelopeInterval }, silentTicks_ { 0 };
+    bool sustain_ { false }, everTriggered_ { false };
 };
 } // namespace trancera

@@ -61,6 +61,8 @@ public:
     void setColor (const AnalogColor& color) noexcept
     {
         color_ = color;
+        rail_ = color_.on ? color_.opAmpHeadroom : 0.0;
+        knee_ = 0.75 * rail_;
         buildLadder (ladderL_, 0x54524E43u, color.dacDnlLsb);
         buildLadder (ladderR_, 0x54524E44u, color.dacDnlLsb);
     }
@@ -81,6 +83,8 @@ public:
                (1.0 - t1 + t2 - t3) / a0 };
         b_ = { (n0 + u) / a0, (3.0 * n0 + u) / a0, (3.0 * n0 - u) / a0, (n0 - u) / a0 };
         normalise_ = 1.0 / std::abs (filters (OutputNode::Rack, 1000.0));
+        for (std::size_t i = 0; i < b_.size(); ++i)
+            bNorm_[i] = b_[i] * normalise_;
 
         const double h = 2.0 * kEngineRate * couplingTau;
         couplingPole_ = (h - 1.0) / (h + 1.0);
@@ -94,20 +98,40 @@ public:
         buffer_.reset();
         jack_.reset();
         panel_.reset();
-        z_.fill ({});
-        couplingX_.fill ({});
-        couplingY_.fill ({});
+        z_.fill (Double2::zero());
+        couplingX_.fill (Double2::zero());
+        couplingY_.fill (Double2::zero());
     }
 
     // One 88.2 kHz DAC word in, the jack voltage out at 88.2 kHz.
     Stereo process (Stereo word) noexcept
     {
-        return finishAnalog ({ convert (word.l, ladderL_), convert (word.r, ladderR_) });
+        return finishAnalog (Double2::make (convert (word.l, ladderL_), convert (word.r, ladderR_)));
     }
 
     Stereo processQ23 (StereoQ23 word) noexcept
     {
-        return finishAnalog ({ convertQ23 (word.l, ladderL_), convertQ23 (word.r, ladderR_) });
+        return finishAnalog (Double2::make (convertQ23 (word.l, ladderL_), convertQ23 (word.r, ladderR_)));
+    }
+
+    void processBlockQ23 (const StereoQ23* in, Stereo* out, int n) noexcept
+    {
+        if (node_ == OutputNode::Digital)
+        {
+            for (int i = 0; i < n; ++i)
+                out[i] = { convertQ23 (in[i].l, ladderL_), convertQ23 (in[i].r, ladderR_) };
+            return;
+        }
+        const bool hasPanel = node_ == OutputNode::KeyboardAsPrinted;
+        const bool hasRail = color_.on && rail_ > 0.0;
+        if (! hasPanel && hasRail)
+            processAnalogBlock<false, true> (in, out, n);
+        else if (! hasPanel && ! hasRail)
+            processAnalogBlock<false, false> (in, out, n);
+        else if (hasPanel && hasRail)
+            processAnalogBlock<true, true> (in, out, n);
+        else
+            processAnalogBlock<true, false> (in, out, n);
     }
 
     // Continuous-time response, without the DAC's sample-and-hold droop.
@@ -147,41 +171,183 @@ private:
         return h;
     }
 
-    class FirstOrder
+    struct FirstOrder
     {
-    public:
         void configure (double zero, double pole, double c) noexcept
         {
             const double a0 = 1.0 + pole * c;
-            a1_ = (1.0 - pole * c) / a0;
-            b0_ = (1.0 + zero * c) / a0;
-            b1_ = (1.0 - zero * c) / a0;
+            a1 = (1.0 - pole * c) / a0;
+            b0 = (1.0 + zero * c) / a0;
+            b1 = (1.0 - zero * c) / a0;
         }
-        void reset() noexcept { z_ = {}; }
-        Stereo process (Stereo x) noexcept
-        {
-            const Stereo y = b0_ * x + z_;
-            z_ = b1_ * x - a1_ * y;
-            return y;
-        }
-
-    private:
-        double a1_ { 0.0 }, b0_ { 1.0 }, b1_ { 0.0 };
-        Stereo z_;
+        void reset() noexcept { z = Double2::zero(); }
+        double a1 { 0.0 }, b0 { 1.0 }, b1 { 0.0 };
+        Double2 z {};
     };
 
-    Stereo finishAnalog (Stereo x) noexcept
+    struct StageCoeffs
     {
-        if (node_ == OutputNode::Digital)
-            return x;
-        for (std::size_t i = 0; i < couplingX_.size(); ++i)
+        double bB0, bB1, bA1;
+        double jB0, jB1, jA1;
+        double pB0, pB1, pA1;
+        double skB0, skB1, skB2, skB3;
+        double skA0, skA1, skA2;
+        double rail, knee;
+    };
+
+    StageCoeffs loadStageCoeffs() const noexcept
+    {
+        return {
+            buffer_.b0, buffer_.b1, buffer_.a1,
+            jack_.b0, jack_.b1, jack_.a1,
+            panel_.b0, panel_.b1, panel_.a1,
+            bNorm_[0], bNorm_[1], bNorm_[2], bNorm_[3],
+            a_[0], a_[1], a_[2],
+            rail_, knee_
+        };
+    }
+
+    template <bool HasPanel, bool HasRail>
+    TRANCERA_FORCE_INLINE Double2 stepAnalog8x (Double2 x, const StageCoeffs& c,
+                                                Double2& bz, Double2& jz, Double2& pz,
+                                                Double2& z0, Double2& z1, Double2& z2) noexcept
+    {
+        const Double2 bufPre0 = c.bB0 * x;
+        const Double2 bufPre1 = c.bB1 * x;
+        const Double2 bufSum = bufPre0 + bufPre1;
+        Double2 xb = Double2::zero();
+
+        Double2 outerResults[2] {};
+    #if defined(__clang__)
+    #pragma unroll
+    #endif
+        for (int i = 0; i < 2; ++i)
         {
-            const Stereo y = couplingGain_ * (x - couplingX_[i]) + couplingPole_ * couplingY_[i];
+            Double2 middleResults[2] {};
+        #if defined(__clang__)
+        #pragma unroll
+        #endif
+            for (int j = 0; j < 2; ++j)
+            {
+                Double2 sub[2] {};
+            #if defined(__clang__)
+            #pragma unroll
+            #endif
+                for (int k = 0; k < 2; ++k)
+                {
+                    xb = (i == 0 && j == 0 && k == 0) ? (bufPre0 + bz)
+                                                      : Double2::mulSub (bufSum, c.bA1, xb);
+                    Double2 xs = Double2::mulAdd (jz, c.jB0, xb);
+                    jz = Double2::mulSub (c.jB1 * xb, c.jA1, xs);
+                    if constexpr (HasPanel)
+                    {
+                        const Double2 xp = Double2::mulAdd (pz, c.pB0, xs);
+                        pz = Double2::mulSub (c.pB1 * xs, c.pA1, xp);
+                        xs = xp;
+                    }
+                    const Double2 y = Double2::mulAdd (z0, c.skB0, xs);
+                    z0 = Double2::mulSub (Double2::mulAdd (z1, c.skB1, xs), c.skA0, y);
+                    z1 = Double2::mulSub (Double2::mulAdd (z2, c.skB2, xs), c.skA1, y);
+                    z2 = Double2::mulSub (c.skB3 * xs, c.skA2, y);
+                    if constexpr (HasRail)
+                    {
+                        sub[k] = (fastAbs (y[0]) <= c.knee && fastAbs (y[1]) <= c.knee)
+                                     ? y
+                                     : Double2::make (swing (y[0], c.rail), swing (y[1], c.rail));
+                    }
+                    else
+                    {
+                        sub[k] = y;
+                    }
+                }
+                middleResults[j] = down_.downsampleInner (sub[0], sub[1]);
+            }
+            outerResults[i] = down_.downsampleMiddle (middleResults[0], middleResults[1]);
+        }
+        bz = Double2::mulSub (bufPre1, c.bA1, xb);
+        return down_.downsampleOuter (outerResults[0], outerResults[1]);
+    }
+
+    template <bool HasPanel, bool HasRail>
+    Stereo runAnalogSample (Double2 v) noexcept
+    {
+        const double cGain = couplingGain_, cPole = couplingPole_;
+        Double2 x = v;
+        for (std::size_t i = 0; i < 4; ++i)
+        {
+            const Double2 y = cGain * (x - couplingX_[i]) + cPole * couplingY_[i];
             couplingX_[i] = x;
             couplingY_[i] = y;
             x = y;
         }
-        return down_.processZeroOrderHold (x, [this] (Stereo v) { return analogue (v); });
+        const StageCoeffs c = loadStageCoeffs();
+        Double2 bz = buffer_.z, jz = jack_.z, pz = panel_.z;
+        Double2 z0 = z_[0], z1 = z_[1], z2 = z_[2];
+        const Double2 out = stepAnalog8x<HasPanel, HasRail> (x, c, bz, jz, pz, z0, z1, z2);
+        buffer_.z = bz;
+        jack_.z = jz;
+        if constexpr (HasPanel)
+            panel_.z = pz;
+        else
+            (void) pz;
+        z_[0] = z0; z_[1] = z1; z_[2] = z2;
+        return { out[0], out[1] };
+    }
+
+    template <bool HasPanel, bool HasRail>
+    void processAnalogBlock (const StereoQ23* in, Stereo* out, int n) noexcept
+    {
+        const double cGain = couplingGain_, cPole = couplingPole_;
+        Double2 cx0 = couplingX_[0], cx1 = couplingX_[1], cx2 = couplingX_[2], cx3 = couplingX_[3];
+        Double2 cy0 = couplingY_[0], cy1 = couplingY_[1], cy2 = couplingY_[2], cy3 = couplingY_[3];
+
+        const StageCoeffs c = loadStageCoeffs();
+        Double2 bz = buffer_.z, jz = jack_.z, pz = panel_.z;
+        Double2 z0 = z_[0], z1 = z_[1], z2 = z_[2];
+
+        auto stepCoupling = [cGain, cPole] (Double2 inVal, Double2& cx, Double2& cy) noexcept -> Double2
+        {
+            const Double2 outVal = cGain * (inVal - cx) + cPole * cy;
+            cx = inVal;
+            cy = outVal;
+            return outVal;
+        };
+
+        for (int idx = 0; idx < n; ++idx)
+        {
+            const Double2 word = Double2::make (convertQ23 (in[idx].l, ladderL_), convertQ23 (in[idx].r, ladderR_));
+            Double2 x = stepCoupling (word, cx0, cy0);
+            x = stepCoupling (x, cx1, cy1);
+            x = stepCoupling (x, cx2, cy2);
+            x = stepCoupling (x, cx3, cy3);
+            const Double2 yOut = stepAnalog8x<HasPanel, HasRail> (x, c, bz, jz, pz, z0, z1, z2);
+            out[idx] = { yOut[0], yOut[1] };
+        }
+
+        couplingX_[0] = cx0; couplingX_[1] = cx1; couplingX_[2] = cx2; couplingX_[3] = cx3;
+        couplingY_[0] = cy0; couplingY_[1] = cy1; couplingY_[2] = cy2; couplingY_[3] = cy3;
+        buffer_.z = bz;
+        jack_.z = jz;
+        if constexpr (HasPanel)
+            panel_.z = pz;
+        else
+            (void) pz;
+        z_[0] = z0; z_[1] = z1; z_[2] = z2;
+    }
+
+    Stereo finishAnalog (Double2 x) noexcept
+    {
+        if (node_ == OutputNode::Digital)
+            return { x[0], x[1] };
+        const bool hasPanel = node_ == OutputNode::KeyboardAsPrinted;
+        const bool hasRail = color_.on && rail_ > 0.0;
+        if (! hasPanel && hasRail)
+            return runAnalogSample<false, true> (x);
+        if (! hasPanel && ! hasRail)
+            return runAnalogSample<false, false> (x);
+        if (hasPanel && hasRail)
+            return runAnalogSample<true, true> (x);
+        return runAnalogSample<true, false> (x);
     }
 
     static void buildLadder (std::array<double, 256>& table, std::uint32_t seed, double dnlLsb) noexcept
@@ -235,9 +401,9 @@ private:
         // engine's only approach it, and a floor would hold them at -1 step
         // (about -108 dBFS, through the coupling caps for some 20 s).
         const double scaled = x * 131072.0;
-        if (std::abs (scaled) < 1.0)
+        if (fastAbs (scaled) < 1.0)
             return 0.0;
-        const double code = std::clamp (std::floor (scaled), -131072.0, 131071.0);
+        const double code = std::clamp (fastFloor (scaled), -131072.0, 131071.0);
         const auto segment = static_cast<std::size_t> ((static_cast<std::int32_t> (code) + 131072) >> 10);
         return code / 131072.0 + ladder[segment];
     }
@@ -257,42 +423,25 @@ private:
         return static_cast<double> (code) * (1.0 / 131072.0) + ladder[segment];
     }
 
-    Stereo analogue (Stereo v) noexcept
-    {
-        // Driven directly by the DAC zero-order-hold staircase at 8 x 88.2 kHz.
-        Stereo x = jack_.process (buffer_.process (v));
-        if (node_ == OutputNode::KeyboardAsPrinted)
-            x = panel_.process (x);
-        const Stereo y = b_[0] * x + z_[0];
-        z_[0] = b_[1] * x - a_[0] * y + z_[1];
-        z_[1] = b_[2] * x - a_[1] * y + z_[2];
-        z_[2] = b_[3] * x - a_[2] * y;
-        const double rail = color_.on ? color_.opAmpHeadroom : 0.0;
-        if (rail <= 0.0)
-            return normalise_ * y;
-        // IC4A's output swing: exactly linear up to three quarters of the
-        // headroom, then a smooth knee (same slope at the joint) up to the rail.
-        return { swing (normalise_ * y.l, rail), swing (normalise_ * y.r, rail) };
-    }
-
     static double swing (double u, double rail) noexcept
     {
-        const double knee = 0.75 * rail, a = std::abs (u);
+        const double knee = 0.75 * rail, a = fastAbs (u);
         if (a <= knee)
             return u;
         const double span = rail - knee;
         return std::copysign (knee + span * softClip ((a - knee) / span), u);
     }
 
-    oversampling::Downsampler8<Stereo> down_;
+    oversampling::Downsampler8<Double2> down_;
     FirstOrder buffer_, jack_, panel_;
     OutputNode node_ { OutputNode::Rack };
     std::array<double, 3> a_ {};
-    std::array<double, 4> b_ { 1.0, 0.0, 0.0, 0.0 };
-    std::array<Stereo, 3> z_ {};
-    std::array<Stereo, 4> couplingX_ {}, couplingY_ {};
+    std::array<double, 4> b_ { 1.0, 0.0, 0.0, 0.0 }, bNorm_ { 1.0, 0.0, 0.0, 0.0 };
+    std::array<Double2, 3> z_ {};
+    std::array<Double2, 4> couplingX_ {}, couplingY_ {};
     double normalise_ { 1.0 }, couplingPole_ { 1.0 }, couplingGain_ { 1.0 };
     AnalogColor color_;
+    double rail_ { 1.35 }, knee_ { 0.75 * 1.35 };
     std::array<double, 256> ladderL_ {}, ladderR_ {};
 };
 } // namespace trancera

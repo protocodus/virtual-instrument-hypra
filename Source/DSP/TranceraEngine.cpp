@@ -43,6 +43,7 @@ EnvLfoFlags envLfoFlags (const Patch& p, bool lfoEdge, double modWheel) noexcept
 void Engine::prepare (double hostRate, std::uint32_t seed)
 {
     seed_ = seed;
+    hostRate_ = hostRate;
     resampler_.prepare (hostRate);
     output_.prepare (OutputNode::Rack);
     for (Voice& v : voices_)
@@ -96,8 +97,10 @@ void Engine::reset() noexcept
     resampler_.reset();
     bend_ = mod_ = 0.0;
     sustain_ = false;
+    everTriggered_ = false;
     order_ = 0;
     untilControl_ = kEnvelopeInterval;
+    silentTicks_ = 0;
 }
 
 Engine::Span Engine::span (int part) const noexcept
@@ -112,6 +115,8 @@ void Engine::setMode (KeyMode mode) noexcept
     if (mode == mode_)
         return;
     mode_ = mode;
+    if (everTriggered_)
+        silentTicks_ = 0;
     for (Voice& v : voices_)
     {
         v.active = v.held = v.sustained = false;
@@ -191,6 +196,8 @@ Patch withVelocity (const Patch& patch, double velocity) noexcept
 
 void Engine::setPatch (Part which, const Patch& patch) noexcept
 {
+    if (everTriggered_)
+        silentTicks_ = 0;
     const int part = static_cast<int> (which);
     PartState& s = parts_[static_cast<std::size_t> (part)];
     const bool becameMono = monophonic (patch)
@@ -404,6 +411,8 @@ void Engine::noteOn (int note, int velocity) noexcept
         noteOff (note);
         return;
     }
+    everTriggered_ = true;
+    silentTicks_ = 0;
     for (int part = 0; part < partCount(); ++part)
         startPart (part, note, std::min (velocity, 127));
 }
@@ -637,77 +646,427 @@ void Engine::control() noexcept
     }
 }
 
-Stereo Engine::tick() noexcept
+void Engine::renderChunk (Stereo* out, int n) noexcept
 {
-    if (--untilControl_ <= 0)
-    {
-        untilControl_ = kEnvelopeInterval;
-        control();
-    }
+    Q23 voiceBuf[maxVoices][kChunkSize];
+    std::int32_t pannedL[kChunkSize];
+    std::int32_t pannedR[kChunkSize];
 
-    std::int32_t pannedSumL = 0, pannedSumR = 0;
-    for (int part = 0; part < partCount(); ++part)
+    bool anyActiveInChunk = false;
+    const int nParts = partCount();
+    for (int part = 0; part < nParts; ++part)
     {
         PartState& s = parts_[static_cast<std::size_t> (part)];
-        std::int32_t voiceSum = 0;
         const Span range = span (part);
+
+        int fullIdx[maxVoices];
+        int fullCount = 0;
+        int tailIdx[maxVoices];
+        int tailLen[maxVoices];
+        int tailCount = 0;
+
         for (int i = range.first; i < range.first + range.count; ++i)
         {
             Voice& v = voices_[static_cast<std::size_t> (i)];
             if (! v.active)
                 continue;
-            if (v.ampMoving)
+            const bool envIdle = v.ampEnv.idle();
+            if (! envIdle)
+            {
+                anyActiveInChunk = true;
+                fullIdx[fullCount++] = i;
+                continue;
+            }
+            if (! v.ampMoving)
+            {
+                if (v.ampSmoothedQ23 <= 8)
+                {
+                    v.active = v.held = v.sustained = false;
+                }
+                else
+                {
+                    anyActiveInChunk = true;
+                    tailIdx[tailCount] = i;
+                    tailLen[tailCount] = n;
+                    ++tailCount;
+                }
+                continue;
+            }
+            if (v.ampSmoothedQ23 <= 8)
             {
                 const Q23 nextAmp = sat24 (v.ampSmoothedQ23
                                            + mulSplit15 (v.ampTargetQ23 - v.ampSmoothedQ23, v.ampAlpha.hi, v.ampAlpha.lo));
                 if (nextAmp == v.ampSmoothedQ23)
+                {
                     v.ampMoving = false;
+                }
                 else
                 {
                     v.ampSmoothedQ23 = nextAmp;
-                    v.ampSplit = splitCoeff15 (v.ampSmoothedQ23);
+                    v.ampSplit = splitCoeff15 (nextAmp);
                 }
-            }
-            if (v.ampEnv.idle() && v.ampSmoothedQ23 <= 8)
-            {
                 v.active = v.held = v.sustained = false;
                 continue;
             }
-            const Q23 x = v.oscillators.processQ23 (random_);
-            const Q23 y = v.filter.processQ23 (x);
-            voiceSum += mulSplit15 (y, v.ampSplit.hi, v.ampSplit.lo);
+            // Env is idle and ampSmoothedQ23 > 8 and ampMoving: count exact active samples before <= 8.
+            anyActiveInChunk = true;
+            Q23 cur = v.ampSmoothedQ23;
+            const Q23 tgt = v.ampTargetQ23;
+            const std::int32_t aHi = v.ampAlpha.hi, aLo = v.ampAlpha.lo;
+            int len = 0;
+            bool stoppedEarly = false;
+            while (len < n)
+            {
+                const Q23 nextAmp = sat24 (cur + mulSplit15 (tgt - cur, aHi, aLo));
+                if (nextAmp == cur)
+                {
+                    len = n;
+                    break;
+                }
+                cur = nextAmp;
+                if (cur <= 8)
+                {
+                    stoppedEarly = true;
+                    break;
+                }
+                ++len;
+            }
+            tailIdx[tailCount] = i;
+            tailLen[tailCount] = stoppedEarly ? len : n;
+            ++tailCount;
         }
-        const Q23 dry = sat24 (voiceSum * 2);
-        const Q23 toned = s.tone.processSaturatingQ23 (dry);
-        const StereoQ23 afterDelay = s.delay.processMixQ23 (toned);
-        const StereoQ23 afterFx = s.chorus.processMixQ23 (afterDelay);
-        if (s.panLQ23 != s.panTargetLQ23)
+
+        int oscPos = 0;
+        while (oscPos + 4 <= fullCount)
         {
-            s.panLQ23 = sat24 (s.panLQ23 + ((s.panTargetLQ23 - s.panLQ23) >> 9));
-            s.panLSplit = splitCoeff15 (s.panLQ23);
+            OscillatorPair* const ops[4] {
+                &voices_[static_cast<std::size_t> (fullIdx[oscPos])].oscillators,
+                &voices_[static_cast<std::size_t> (fullIdx[oscPos + 1])].oscillators,
+                &voices_[static_cast<std::size_t> (fullIdx[oscPos + 2])].oscillators,
+                &voices_[static_cast<std::size_t> (fullIdx[oscPos + 3])].oscillators
+            };
+            if (OscillatorPair::canProcess4SuperSaw (ops))
+            {
+                Q23* const bufs[4] { voiceBuf[oscPos], voiceBuf[oscPos + 1], voiceBuf[oscPos + 2], voiceBuf[oscPos + 3] };
+                OscillatorPair::process4SuperSawBlockQ23 (ops, bufs, n);
+                oscPos += 4;
+                continue;
+            }
+            ops[0]->processBlockQ23 (voiceBuf[oscPos], n, random_);
+            ++oscPos;
         }
-        if (s.panRQ23 != s.panTargetRQ23)
+        while (oscPos < fullCount)
         {
-            s.panRQ23 = sat24 (s.panRQ23 + ((s.panTargetRQ23 - s.panRQ23) >> 9));
-            s.panRSplit = splitCoeff15 (s.panRQ23);
+            voices_[static_cast<std::size_t> (fullIdx[oscPos])].oscillators.processBlockQ23 (voiceBuf[oscPos], n, random_);
+            ++oscPos;
         }
-        pannedSumL += mulSplit15 (afterFx.l, s.panLSplit.hi, s.panLSplit.lo);
-        pannedSumR += mulSplit15 (afterFx.r, s.panRSplit.hi, s.panRSplit.lo);
+
+        int fltPos = 0;
+        while (fltPos + 4 <= fullCount)
+        {
+            Voice* const v0 = &voices_[static_cast<std::size_t> (fullIdx[fltPos])];
+            Voice* const v1 = &voices_[static_cast<std::size_t> (fullIdx[fltPos + 1])];
+            Voice* const v2 = &voices_[static_cast<std::size_t> (fullIdx[fltPos + 2])];
+            Voice* const v3 = &voices_[static_cast<std::size_t> (fullIdx[fltPos + 3])];
+            const FilterType t = v0->patch.filter.type;
+            const bool steep = v0->patch.filter.steep;
+            if (v1->patch.filter.type == t && v1->patch.filter.steep == steep
+                && v2->patch.filter.type == t && v2->patch.filter.steep == steep
+                && v3->patch.filter.type == t && v3->patch.filter.steep == steep)
+            {
+                Filter* const fs[4] { &v0->filter, &v1->filter, &v2->filter, &v3->filter };
+                Q23* const bufs[4] { voiceBuf[fltPos], voiceBuf[fltPos + 1], voiceBuf[fltPos + 2], voiceBuf[fltPos + 3] };
+                Filter::process4BlockQ23 (fs, bufs, n, t, steep);
+                fltPos += 4;
+                continue;
+            }
+            v0->filter.processBlockQ23 (voiceBuf[fltPos], n);
+            ++fltPos;
+        }
+        while (fltPos < fullCount)
+        {
+            voices_[static_cast<std::size_t> (fullIdx[fltPos])].filter.processBlockQ23 (voiceBuf[fltPos], n);
+            ++fltPos;
+        }
+
+        std::int32_t voiceSum[kChunkSize] {};
+        for (int k = 0; k < fullCount; ++k)
+        {
+            Voice& v = voices_[static_cast<std::size_t> (fullIdx[k])];
+            const Q23* const buf = voiceBuf[k];
+            if (! v.ampMoving)
+            {
+                const std::int32_t aHi = v.ampSplit.hi, aLo = v.ampSplit.lo;
+                for (int j = 0; j < n; ++j)
+                    voiceSum[j] += mulSplit15 (buf[j], aHi, aLo);
+            }
+            else
+            {
+                Q23 cur = v.ampSmoothedQ23;
+                const Q23 tgt = v.ampTargetQ23;
+                const std::int32_t alHi = v.ampAlpha.hi, alLo = v.ampAlpha.lo;
+                Coeff15 sp = v.ampSplit;
+                bool mob = true;
+                for (int j = 0; j < n; ++j)
+                {
+                    if (mob)
+                    {
+                        const Q23 nextAmp = sat24 (cur + mulSplit15 (tgt - cur, alHi, alLo));
+                        if (nextAmp == cur)
+                            mob = false;
+                        else
+                        {
+                            cur = nextAmp;
+                            sp = splitCoeff15 (cur);
+                        }
+                    }
+                    voiceSum[j] += mulSplit15 (buf[j], sp.hi, sp.lo);
+                }
+                v.ampSmoothedQ23 = cur;
+                v.ampSplit = sp;
+                v.ampMoving = mob;
+            }
+        }
+
+        for (int t = 0; t < tailCount; ++t)
+        {
+            Voice& v = voices_[static_cast<std::size_t> (tailIdx[t])];
+            const int activeLen = tailLen[t];
+            Q23 tBuf[kChunkSize];
+            if (activeLen > 0)
+            {
+                v.oscillators.processBlockQ23 (tBuf, activeLen, random_);
+                v.filter.processBlockQ23 (tBuf, activeLen);
+            }
+            if (! v.ampMoving)
+            {
+                const std::int32_t aHi = v.ampSplit.hi, aLo = v.ampSplit.lo;
+                for (int j = 0; j < activeLen; ++j)
+                    voiceSum[j] += mulSplit15 (tBuf[j], aHi, aLo);
+            }
+            else
+            {
+                Q23 cur = v.ampSmoothedQ23;
+                const Q23 tgt = v.ampTargetQ23;
+                const std::int32_t alHi = v.ampAlpha.hi, alLo = v.ampAlpha.lo;
+                Coeff15 sp = v.ampSplit;
+                bool mob = true;
+                for (int j = 0; j < activeLen; ++j)
+                {
+                    if (mob)
+                    {
+                        const Q23 nextAmp = sat24 (cur + mulSplit15 (tgt - cur, alHi, alLo));
+                        if (nextAmp == cur)
+                            mob = false;
+                        else
+                        {
+                            cur = nextAmp;
+                            sp = splitCoeff15 (cur);
+                        }
+                    }
+                    voiceSum[j] += mulSplit15 (tBuf[j], sp.hi, sp.lo);
+                }
+                if (activeLen < n)
+                {
+                    const Q23 endAmp = sat24 (cur + mulSplit15 (tgt - cur, alHi, alLo));
+                    cur = endAmp;
+                    sp = splitCoeff15 (cur);
+                    v.active = v.held = v.sustained = false;
+                }
+                v.ampSmoothedQ23 = cur;
+                v.ampSplit = sp;
+                v.ampMoving = mob;
+            }
+        }
+
+        Q23 toned[kChunkSize], fxL[kChunkSize], fxR[kChunkSize];
+        for (int j = 0; j < n; ++j)
+            toned[j] = sat24 (voiceSum[j] * 2);
+        s.tone.processBlockSaturatingQ23 (toned, n);
+        s.delay.processBlockMixQ23 (toned, fxL, fxR, n);
+        s.chorus.processBlockMixQ23 (fxL, fxR, n);
+
+        if (s.panLQ23 == s.panTargetLQ23 && s.panRQ23 == s.panTargetRQ23)
+        {
+            const std::int32_t lHi = s.panLSplit.hi, lLo = s.panLSplit.lo;
+            const std::int32_t rHi = s.panRSplit.hi, rLo = s.panRSplit.lo;
+            if (part == 0)
+            {
+                for (int j = 0; j < n; ++j)
+                {
+                    pannedL[j] = mulSplit15 (fxL[j], lHi, lLo);
+                    pannedR[j] = mulSplit15 (fxR[j], rHi, rLo);
+                }
+            }
+            else
+            {
+                for (int j = 0; j < n; ++j)
+                {
+                    pannedL[j] += mulSplit15 (fxL[j], lHi, lLo);
+                    pannedR[j] += mulSplit15 (fxR[j], rHi, rLo);
+                }
+            }
+        }
+        else
+        {
+            Q23 pL = s.panLQ23, pR = s.panRQ23;
+            const Q23 tL = s.panTargetLQ23, tR = s.panTargetRQ23;
+            Coeff15 lSp = s.panLSplit, rSp = s.panRSplit;
+            for (int j = 0; j < n; ++j)
+            {
+                if (pL != tL)
+                {
+                    pL = sat24 (pL + ((tL - pL) >> 9));
+                    lSp = splitCoeff15 (pL);
+                }
+                if (pR != tR)
+                {
+                    pR = sat24 (pR + ((tR - pR) >> 9));
+                    rSp = splitCoeff15 (pR);
+                }
+                const std::int32_t wl = mulSplit15 (fxL[j], lSp.hi, lSp.lo);
+                const std::int32_t wr = mulSplit15 (fxR[j], rSp.hi, rSp.lo);
+                if (part == 0)
+                {
+                    pannedL[j] = wl;
+                    pannedR[j] = wr;
+                }
+                else
+                {
+                    pannedL[j] += wl;
+                    pannedR[j] += wr;
+                }
+            }
+            s.panLQ23 = pL; s.panRQ23 = pR;
+            s.panLSplit = lSp; s.panRSplit = rSp;
+        }
     }
-    const Q23 sumL = sat24 (pannedSumL * 2) >> 2;
-    const Q23 sumR = sat24 (pannedSumR * 2) >> 2;
-    const StereoQ23 dacWord { sat24 (static_cast<std::int64_t> (sumL) * 12),
-                              sat24 (static_cast<std::int64_t> (sumR) * 12) };
-    return output_.processQ23 (dacWord);
+
+    StereoQ23 dacWords[kChunkSize];
+    for (int j = 0; j < n; ++j)
+    {
+        const Q23 sumL = sat24 (pannedL[j] * 2) >> 2;
+        const Q23 sumR = sat24 (pannedR[j] * 2) >> 2;
+        dacWords[j] = { sat24 (static_cast<std::int64_t> (sumL) * 12),
+                        sat24 (static_cast<std::int64_t> (sumR) * 12) };
+    }
+    output_.processBlockQ23 (dacWords, out, n);
+
+    if (anyActiveInChunk)
+    {
+        silentTicks_ = 0;
+    }
+    else
+    {
+        int sCount = silentTicks_;
+        for (int j = 0; j < n; ++j)
+            sCount = (fastAbs (out[j].l) <= 1.0e-8 && fastAbs (out[j].r) <= 1.0e-8) ? (sCount + 1) : 0;
+        silentTicks_ = sCount;
+    }
+}
+
+void Engine::renderTicks (Stereo* out, int count) noexcept
+{
+    int pos = 0;
+    while (pos < count)
+    {
+        if (untilControl_ <= 1)
+        {
+            untilControl_ = kEnvelopeInterval + 1;
+            control();
+        }
+        const int n = std::min ({ count - pos, untilControl_ - 1, kChunkSize });
+        untilControl_ -= n;
+        renderChunk (out + pos, n);
+        pos += n;
+    }
+}
+
+void Engine::advanceIdleTicks (int ticks) noexcept
+{
+    if (ticks <= 0)
+        return;
+    for (int part = 0; part < partCount(); ++part)
+        parts_[static_cast<std::size_t> (part)].chorus.advanceIdlePhase (ticks);
+
+    int rem = ticks;
+    while (rem > 0)
+    {
+        if (untilControl_ <= 1)
+        {
+            untilControl_ = kEnvelopeInterval + 1;
+            control();
+        }
+        const int step = std::min (rem, untilControl_ - 1);
+        untilControl_ -= step;
+        rem -= step;
+    }
+}
+
+Stereo Engine::tick() noexcept
+{
+    Stereo out {};
+    renderTicks (&out, 1);
+    return out;
 }
 
 void Engine::render (float* left, float* right, int frames) noexcept
 {
-    for (int i = 0; i < frames; ++i)
+    bool anyActive = false;
+    for (const Voice& v : voices_)
+        if (v.active) { anyActive = true; break; }
+
+    if (! everTriggered_ || (! anyActive && silentTicks_ >= kIdleTicksThreshold))
     {
-        const Stereo out = resampler_.process ([this] { return tick(); });
-        left[i] = static_cast<float> (volume_ * out.l);
-        right[i] = static_cast<float> (volume_ * out.r);
+        std::fill_n (left, frames, 0.0f);
+        std::fill_n (right, frames, 0.0f);
+        const int ticks = resampler_.advanceIdle (frames);
+        advanceIdleTicks (ticks);
+        return;
+    }
+
+    const double vol = volume_;
+    if (resampler_.isPassthrough())
+    {
+        Stereo out[kChunkSize];
+        int pos = 0;
+        while (pos < frames)
+        {
+            const int n = std::min (frames - pos, kChunkSize);
+            renderTicks (out, n);
+            for (int i = 0; i < n; ++i)
+            {
+                left[pos + i] = static_cast<float> (vol * out[i].l);
+                right[pos + i] = static_cast<float> (vol * out[i].r);
+            }
+            pos += n;
+        }
+        return;
+    }
+
+    constexpr int maxTickBuf = 128;
+    const int hostBatch = std::max (1, std::min (64, static_cast<int> (96.0 * hostRate_ / kEngineRate)));
+    Stereo tickBuf[maxTickBuf];
+    int pos = 0;
+    while (pos < frames)
+    {
+        const int sub = std::min (frames - pos, hostBatch);
+        const int needed = resampler_.ticksNeededForFrames (sub);
+        if (needed <= maxTickBuf)
+        {
+            renderTicks (tickBuf, needed);
+            resampler_.processBlockFromTicks (tickBuf, left + pos, right + pos, sub, vol);
+        }
+        else
+        {
+            for (int i = 0; i < sub; ++i)
+            {
+                const Stereo out = resampler_.process ([this] { return tick(); });
+                left[pos + i] = static_cast<float> (vol * out.l);
+                right[pos + i] = static_cast<float> (vol * out.r);
+            }
+        }
+        pos += sub;
     }
 }
 } // namespace trancera
