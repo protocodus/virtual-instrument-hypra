@@ -35,7 +35,9 @@ bool set (Patch& p, const std::string& name, int v)
         { "portamento.time", &p.portamentoTime }, { "lfo1.fade", &p.lfo1.fade }, { "lfo2.rate", &p.lfo2.rate },
         { "lfo2.pitch", &p.lfo2.pitch }, { "lfo2.filter", &p.lfo2.filter }, { "lfo2.amp", &p.lfo2.amp },
         { "xmod", &p.xmod }, { "amplfo", &p.ampLfo }, { "chorus", &p.effects.chorus },
-        { "delay.time", &p.effects.delayTime }, { "delay.feedback", &p.effects.feedback }, { "delay", &p.effects.delay } };
+        { "delay.time", &p.effects.delayTime }, { "delay.feedback", &p.effects.feedback }, { "delay", &p.effects.delay },
+        { "osc2.fine", &p.osc2.fine }, { "osc2.pw", &p.osc2.pulseWidth }, { "osc2.pwm", &p.osc2.pwmDepth },
+        { "oscshift", &p.oscShift }, { "unison.detune", &p.unisonDetune } };
     if (const auto it = ints.find (name); it != ints.end())
         *it->second = v;
     else if (name == "osc1.wave")
@@ -60,6 +62,12 @@ bool set (Patch& p, const std::string& name, int v)
         p.effects.chorusType = static_cast<ChorusType> (v);
     else if (name == "delay.type")
         p.effects.delayType = static_cast<DelayType> (v);
+    else if (name == "osc2.sync")
+        p.osc2.sync = v != 0;
+    else if (name == "dest")
+        p.destination = static_cast<ModDestination> (v);
+    else if (name == "unison")
+        p.unison = v != 0;
     else if (name == "ring")
         p.ring = v != 0;
     else

@@ -604,6 +604,28 @@ void toneControl()
     near (gainAt (-64, 0, 31.5), -22.5, 1.5, "bass -64 cuts 31 Hz 22 dB");
     near (gainAt (63, 0, 4000.0), 0.2, 0.5, "bass leaves the treble");
 }
+
+// Factory-patch round on JE-8086: amp SUSTAIN is square-law, filter SUSTAIN linear.
+void sustainLaw()
+{
+    near (mapping::ampSustain (64), 0.254, 0.002, "amp sustain 64 is a quarter (-11.9 dB)");
+    near (mapping::ampSustain (127), 1.0, 1e-12, "amp sustain 127");
+    near (mapping::filterSustain (64), 64.0 / 127.0, 1e-12, "filter sustain is linear");
+    Patch p;
+    p.osc1.wave = Wave1::Triangle;
+    p.balance = -64;
+    p.amp = { 0, 0, 64, 5 };
+    auto x = renderNote (p, fs, 0.6, 60);
+    p.amp.sustain = 127;
+    auto y = renderNote (p, fs, 0.6, 60);
+    double ex = 0.0, ey = 0.0;
+    for (std::size_t i = static_cast<std::size_t> (0.3 * fs); i < x.size(); ++i)
+    {
+        ex += x[i] * x[i];
+        ey += y[i] * y[i];
+    }
+    near (10.0 * std::log10 (ex / ey), -11.9, 0.3, "sustain 64 plays 11.9 dB down");
+}
 } // namespace
 
 void* operator new (std::size_t size)
@@ -621,7 +643,7 @@ int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
-        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl } };
+        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

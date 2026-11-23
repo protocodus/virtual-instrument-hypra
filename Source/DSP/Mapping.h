@@ -249,6 +249,12 @@ inline double lfoHz (int value) noexcept
     return lfoTable[i] * std::pow (lfoTable[i + 1] / lfoTable[i], (a - lo) / (hi - lo));
 }
 
+// [measured] SUSTAIN on JE-8086: the amp envelope's is square-law (64 plays
+// 11.9 dB down, every 16th value within 0.1 dB), the filter envelope's is
+// linear in cutoff steps (within 0.01).
+inline double ampSustain (int value) noexcept { return unit (value) * unit (value); }
+inline double filterSustain (int value) noexcept { return unit (value); }
+
 // [measured] Every envelope segment starts late: decay and release by
 // 7.5 ms from 10 to 29 and by 25 ms from 30 up (fits every fourth value, and
 // on a C6 for the short ones); attack by 14 ms from 30 up. Below that they

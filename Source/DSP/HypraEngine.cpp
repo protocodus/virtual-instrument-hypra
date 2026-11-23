@@ -112,15 +112,15 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
     for (int i = range.first; i < range.first + range.count; ++i)
     {
         Voice& v = voices_[static_cast<std::size_t> (i)];
-        const auto set = [] (Envelope& env, const EnvParams& e)
+        const auto set = [] (Envelope& env, const EnvParams& e, double sustain)
         {
             env.configure (mapping::attackTau (e.attack), mapping::envelopeTau (e.decay),
-                           unit (e.sustain), mapping::envelopeTau (e.release),
+                           sustain, mapping::envelopeTau (e.release),
                            mapping::attackHoldSeconds (e.attack), mapping::segmentHoldSeconds (e.decay),
                            mapping::segmentHoldSeconds (e.release));
         };
-        set (v.ampEnv, patch.amp);
-        set (v.filterEnv, patch.filter.env);
+        set (v.ampEnv, patch.amp, mapping::ampSustain (patch.amp.sustain));
+        set (v.filterEnv, patch.filter.env, mapping::filterSustain (patch.filter.env.sustain));
         if (becameMono && i - range.first >= (unison (patch) ? range.count : 1))
             release (v);
     }
@@ -163,16 +163,16 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
         v.ampEnv.reset();
         v.filterEnv.reset();
     }
-    const auto set = [] (Envelope& env, const EnvParams& e)
+    const auto set = [] (Envelope& env, const EnvParams& e, double sustain)
     {
         env.configure (mapping::attackTau (e.attack), mapping::envelopeTau (e.decay),
-                       unit (e.sustain), mapping::envelopeTau (e.release),
+                       sustain, mapping::envelopeTau (e.release),
                        mapping::attackHoldSeconds (e.attack), mapping::segmentHoldSeconds (e.decay),
                        mapping::segmentHoldSeconds (e.release));
         env.trigger();
     };
-    set (v.ampEnv, p.amp);
-    set (v.filterEnv, p.filter.env);
+    set (v.ampEnv, p.amp, mapping::ampSustain (p.amp.sustain));
+    set (v.filterEnv, p.filter.env, mapping::filterSustain (p.filter.env.sustain));
     // A mono retrigger keeps its supersaw phases running.
     if (fresh || ! monophonic (p))
         v.oscillators.trigger (random_, p.osc1.wave, fresh);
