@@ -4,8 +4,9 @@ Hypra is a local proof of concept (working name) that follows the Protocodus
 instrument layout: this repository owns the DSP in `Source/DSP/`, and a later
 Rack Extension will be a thin adapter over it.
 
-- The owner has not approved a GitHub repository. Do not add a remote, push
-  or publish until they do.
+- The owner asked for a push on 2026-11-23. The remote is the private
+  `protocodus/virtual-instrument-hypra`. Push `main` only, never other
+  branches.
 - `Source/DSP/` is JUCE-free C++17. No allocation, file I/O, locks or
   exceptions on the audio thread.
 - Not clean-room since 2026-11-23: the owner accepted the risk and asked
