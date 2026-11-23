@@ -1,6 +1,6 @@
-// Linear-phase 8x oversampling, copied unchanged from Protocodus Septum
-// (Source/DSP/AnalogOutput.h at f4e6377, same owner and licence). These are
-// numerical rate-conversion filters, not claims about the modelled hardware.
+// Linear-phase 8x oversampling, Protocodus's own code (same owner and
+// licence). These are numerical rate-conversion filters, not claims about the
+// modelled hardware.
 #pragma once
 
 #include <array>
