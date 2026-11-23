@@ -4,7 +4,7 @@
 #include "Core.h"
 #include "Mapping.h"
 
-namespace hypra
+namespace trancera
 {
 class Envelope
 {
@@ -129,4 +129,4 @@ private:
     double attackStep_ { 1.0 }, decayStep_ { 1.0 }, releaseStep_ { 1.0 }, sustain_ { 1.0 };
     bool attackHoldSmoother_ { false };
 };
-} // namespace hypra
+} // namespace trancera

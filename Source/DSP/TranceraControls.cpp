@@ -1,8 +1,8 @@
-#include "HypraControls.h"
+#include "TranceraControls.h"
 
 #include <algorithm>
 
-namespace hypra
+namespace trancera
 {
 namespace
 {
@@ -117,4 +117,4 @@ int controlValue (const Patch& patch, int control) noexcept
         default: return 0;
     }
 }
-} // namespace hypra
+} // namespace trancera

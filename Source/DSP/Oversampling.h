@@ -6,7 +6,7 @@
 #include <array>
 #include <cstddef>
 
-namespace hypra
+namespace trancera
 {
 namespace oversampling
 {
@@ -146,4 +146,4 @@ private:
     HalfBand<4, innerTaps, V> inner_;
 };
 } // namespace oversampling
-} // namespace hypra
+} // namespace trancera

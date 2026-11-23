@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""A/B a recording of the hardware against a Hypra render of the same phrase.
+"""A/B a recording of the hardware against a Trancera render of the same phrase.
 
   python3 -I Tools/compare_reference.py reference.{wav,mp3,ogg} model.wav outdir
 
-Writes A.wav (the recording) and B.wav (Hypra) at 48 kHz / 24 bit, mono,
+Writes A.wav (the recording) and B.wav (Trancera) at 48 kHz / 24 bit, mono,
 aligned within 0.5 s and matched on RMS by turning the louder one down, with
 report.json holding the trims and the third-octave differences.
 
@@ -76,7 +76,7 @@ def main():
     a, b = bands(pair[0]), bands(pair[1])
     top = max(a.values())
     heard = [k for k in a if a[k] > top - 60]
-    report = {'A': 'hardware recording', 'B': 'Hypra', 'seconds': len(reference) / RATE,
+    report = {'A': 'hardware recording', 'B': 'Trancera', 'seconds': len(reference) / RATE,
               'lag_samples': lag, 'trim_db': [round(20 * float(np.log10(t)), 2) for t in trims],
               'b_minus_a_db': {k: round(float(b[k] - a[k]), 2) for k in heard}}
     (out / 'report.json').write_text(json.dumps(report, indent=1) + '\n')

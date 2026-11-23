@@ -2,11 +2,11 @@
 #pragma once
 
 #include "Core.h"
-#include "HypraPatch.h"
+#include "TranceraPatch.h"
 
 #include <array>
 
-namespace hypra::mapping
+namespace trancera::mapping
 {
 inline constexpr std::array<std::uint16_t, 128> toneBassB {
      32767,  32751,  32735,  32719,  32703,  32687,  32671,  32655,  32639,  32623,  32607,  32591,  32575,  32559,  32543,  32527,
@@ -619,4 +619,4 @@ inline Stereo panGains (double panNorm) noexcept
 }
 
 inline constexpr double panCenterGain = 22784.0 / 32768.0;
-} // namespace hypra::mapping
+} // namespace trancera::mapping

@@ -1,6 +1,6 @@
 # Third-party notices
 
-Hypra contains no third-party code.
+Trancera contains no third-party code.
 
 `Source/DSP/Oversampling.h` is copied from Septum, which Protocodus also owns
 and licenses on the same terms. Its supersaw constants, like Septum's, are

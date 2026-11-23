@@ -1,4 +1,4 @@
-"""Maps JE-8086 part A settings (index, count) onto HypraRenderEvents parameter names."""
+"""Maps JE-8086 part A settings (index, count) onto TranceraRenderEvents parameter names."""
 U=lambda i,n:i
 B=lambda i,n:i-64
 E=lambda i,n:i

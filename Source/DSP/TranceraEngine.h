@@ -10,7 +10,7 @@
 
 #include <array>
 
-namespace hypra
+namespace trancera
 {
 enum class Part : std::uint8_t { Upper, Lower };
 enum class KeyMode : std::uint8_t { Single, Dual };
@@ -99,4 +99,4 @@ private:
     int partDetune_ { 0 }, untilControl_ { 0 };
     bool sustain_ { false };
 };
-} // namespace hypra
+} // namespace trancera

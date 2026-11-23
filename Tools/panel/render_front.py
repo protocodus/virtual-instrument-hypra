@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hypra's Rack Extension front-panel draft (a concept, not a built device).
+"""Trancera's Rack Extension front-panel draft (a concept, not a built device).
 
   python3 Tools/panel/render_front.py [path/to/reason-rack-extension]
 
@@ -221,7 +221,7 @@ def header():
     rect((0, 0, W, HEADER), 0, RAIL)
     paste(Image.open(RETRA / 'Brand' / 'Protocodus-logo.png'), 36, 10, 29, 24)
     claim('logo', (36, 10, 65, 34))
-    text(76, 22, 'HYPRA', 20, anchor='lm', bold=True)
+    text(76, 22, 'TRANCERA', 20, anchor='lm', bold=True)
     text(160, 22, 'Virtual analog', 11, MUTED, 'lm')
     rect((337, 12, 583, 32), 3, GLASS)
     claim('patch', (337, 12, 583, 32))
@@ -231,7 +231,7 @@ def header():
     claim('browse', (590, 11, 648, 33))
     paste(Image.open(stock / 'TapeHorz.png'), 655, 15.5, 80, 13)
     claim('tape', (655, 15.5, 735, 28.5))
-    text(695, 22, 'Hypra 1', 9, INK, track=False)
+    text(695, 22, 'Trancera 1', 9, INK, track=False)
     circle(298, 22, 3, YELLOW)
     text(305, 22, 'Note', 11, MUTED, 'lm')
 

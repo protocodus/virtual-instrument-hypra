@@ -32,7 +32,7 @@
 #include <array>
 #include <complex>
 
-namespace hypra
+namespace trancera
 {
 // Digital is the DAC word itself, for comparing with an emulator's output.
 enum class OutputNode : std::uint8_t { Rack, KeyboardAsPrinted, Digital };
@@ -185,4 +185,4 @@ private:
     std::array<Stereo, 4> couplingX_ {}, couplingY_ {};
     double normalise_ { 1.0 }, couplingPole_ { 1.0 }, couplingGain_ { 1.0 };
 };
-} // namespace hypra
+} // namespace trancera

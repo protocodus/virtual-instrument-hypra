@@ -1,4 +1,4 @@
-# Handoff: matching Hypra to the JP-8000 through firmware analysis
+# Handoff: matching Trancera to the JP-8000 through firmware analysis
 
 Written 2026-11-23 for the next agent (human or LLM) who picks this up.
 Read `CLAUDE.md`, `README.md`, `Docs/research/black-box-je8086-2026-11-22.md`
@@ -6,9 +6,9 @@ and `Docs/research/hardware-model-2026-11-22.md` first.
 
 ## Goal and permission
 
-Make Hypra (this repo, a JUCE-free C++17 JP-8000 engine, 0.6.0) match the
-Roland JP-8000 as closely as possible, by changing Hypra's own DSP model.
-Do not use samples or recordings inside Hypra.
+Make Trancera (this repo, a JUCE-free C++17 JP-8000 engine, 0.6.0) match the
+Roland JP-8000 as closely as possible, by changing Trancera's own DSP model.
+Do not use samples or recordings inside Trancera.
 
 On 2026-11-23 the owner accepted the legal risk and asked for the JE-8086
 emulator (gearmulator, GPL) and the JP-8000 firmware it runs to be
@@ -17,12 +17,12 @@ analysed. The repo is therefore no longer clean-room. The rules in
 
 - Keep gearmulator source, ROM images, DSP dumps and disassembly listings
   **outside** this repository.
-- Write Hypra's own code from what the analysis shows. Never paste
+- Write Trancera's own code from what the analysis shows. Never paste
   gearmulator code here; that would bring the GPL with it.
 - Tag every constant taken from the firmware `[firmware]`, naming the chip,
   core and words (or routine) it came from.
 
-## Where Hypra stands
+## Where Trancera stands
 
 Every law already fitted to JE-8086 black-box captures is listed in
 `Docs/research/black-box-je8086-2026-11-22.md` (rounds 1 to 5) with its
@@ -37,10 +37,10 @@ of how much they matter to the sound:
 2. **Moving chorus and flanger types** (SUPER CHORUS SLW/MID/FST/CLR,
    FLANGER x3, DEEP/JET PHASING, TWISTING). Rates, depths, tap counts and
    feedback are guesses (`Source/DSP/Effects.h`, `presets`). Two black-box
-   methods failed; they were validated against Hypra's own known rates and
+   methods failed; they were validated against Trancera's own known rates and
    did not recover them.
 3. **Feedback oscillator above the howl.** The harmonic and loop gain match;
-   the emulator's howl carries a square's odd harmonics that Hypra's
+   the emulator's howl carries a square's odd harmonics that Trancera's
    band-passed loop does not.
 4. Smaller: release and decay below 10 (two-stage in the emulator), the
    velocity matrix, LFO 1 to X-MOD/OSC 2, PWM, sync, the delay's tone, and
@@ -61,7 +61,7 @@ of how much they matter to the sound:
     model-against-capture checks. `ab*.py`: A/B file builders.
   - Captures (`cap*.npz`) are not in the repo. They lived in a session
     scratchpad and may be gone; re-run the `cap*.py` plans (minutes each).
-- `Tools/RenderEvents.cpp` (`build-dsp/HypraRenderEvents`): renders Hypra
+- `Tools/RenderEvents.cpp` (`build-dsp/TranceraRenderEvents`): renders Trancera
   from a timed event list; parameters, `mod`, `node digital`, `stereo`.
 - `Tools/firmware-analysis/`:
   - `jeProbe.cpp`, `CMakeLists.txt`: a tool that links gearmulator's
@@ -176,9 +176,9 @@ tools); rebuild it if it is gone.
   land on the old waveform. Use `jh.FORCE = True`.
 - The first note after a patch with SUSTAIN 0 is sometimes dropped; play a
   throwaway note first.
-- Patch defaults matter: Hypra's oscillator SHAPE default is 0, as on
+- Patch defaults matter: Trancera's oscillator SHAPE default is 0, as on
   JE-8086. Always set `osc1.ctrl1` explicitly in A/B renders.
-- `HypraRenderEvents` needs events sorted by time.
+- `TranceraRenderEvents` needs events sorted by time.
 - In the probe, voices rotate unless MONO is on (`patch 47 1`); use two
   dumps of an unchanged state to find the always-moving words.
 - Enumerated controls clamp out-of-range values; test them with their real

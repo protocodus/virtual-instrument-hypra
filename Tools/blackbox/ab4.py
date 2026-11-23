@@ -15,11 +15,11 @@ gap=np.zeros(int(0.5*SR));out=[];key=[];t=0.0
 for name,a,sets,notes,dur in items:
     b=ours(sets,notes,dur);n=min(len(a),len(b),int((dur+LAT+0.1)*SR));a=a[:n];b=b[:n]
     g=a.std()/max(b.std(),1e-9)
-    for lab,x in (('A emulator',a),('B Hypra 0.4.1',b*g)):
+    for lab,x in (('A emulator',a),('B Trancera 0.4.1',b*g)):
         key.append(f'{t:6.1f} s  {lab:14s} {name}');out+=[x,gap];t+=(len(x)+len(gap))/SR
     out.append(gap);t+=len(gap)/SR
 x=np.concatenate(out);x*=0.5/abs(x).max()
 d=sys.argv[1];os.makedirs(d,exist_ok=True)
 subprocess.run(['ffmpeg','-v','error','-y','-f','f32le','-ar',str(SR),'-ac','1','-i','-','-ar','48000','-c:a','pcm_s24le',d+'/ab-round2-timing.wav'],input=x.astype('<f4').tobytes(),check=True)
-open(d+'/KEY.txt','w').write('A/B round 2: JE-8086 (JP-8000 firmware 1.05) against Hypra 0.4.1, digital output node.\nEach pair is emulator first, then Hypra, level-matched per pair. Times are from the start of the file.\n\n'+'\n'.join(key)+'\n')
+open(d+'/KEY.txt','w').write('A/B round 2: JE-8086 (JP-8000 firmware 1.05) against Trancera 0.4.1, digital output node.\nEach pair is emulator first, then Trancera, level-matched per pair. Times are from the start of the file.\n\n'+'\n'.join(key)+'\n')
 print(open(d+'/KEY.txt').read(),len(x)/SR)

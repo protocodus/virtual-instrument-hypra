@@ -69,7 +69,7 @@ through the same codec, median of 16 starting-phase seeds:
 What is left is mostly between 400 and 800 Hz, where each note's random
 phases move harmonics by about half a decibel.
 
-The JP-8000 file against Hypra's nearest saw (SHAPE 10): 2.1 dB RMS, 5.8 dB
+The JP-8000 file against Trancera's nearest saw (SHAPE 10): 2.1 dB RMS, 5.8 dB
 at worst, at the top. Its harmonics follow (1 + 1.24 / n^2) to 0.23 dB under
 a treble roll-off. Nothing was fitted to it, because its processing and
 settings are unknown.
@@ -124,7 +124,7 @@ harmonics and 27 Hz beats against the note's. A loop 3.1 and 2.0 samples
 short of the period at 88.2 kHz gives both. Two notes, with a ribbon on the
 patch: tentative.
 
-**Rebuilt phrase.** A33 played back by Hypra from the transcription with each
+**Rebuilt phrase.** A33 played back by Trancera from the transcription with each
 note's fitted cutoff curve, level-matched per note and put through MP3:
 third-octave gap 3.0 dB on the fitted half, 3.7 dB held out. Most of the gap
 is where the cutoff curves could not be read (four notes in ten) and were

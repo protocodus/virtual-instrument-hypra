@@ -1,11 +1,11 @@
 // Renders a timed event list through the engine, for A/B tests against
-// recordings: HypraRenderEvents <events.txt> <out.f32> <rate> <seconds>
+// recordings: TranceraRenderEvents <events.txt> <out.f32> <rate> <seconds>
 //
 // One event a line, "<seconds> <name> <value>...": note <key> <velocity>,
 // off <key>, set <parameter> <value>, mod <0-127>, or node rack|printed|digital. Writes mono
 // float32 (the left channel), or interleaved stereo with a fifth argument
 // "stereo". Lines starting with # are ignored.
-#include "HypraEngine.h"
+#include "TranceraEngine.h"
 
 #include <cstdio>
 #include <fstream>
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-using namespace hypra;
+using namespace trancera;
 
 namespace
 {
@@ -80,7 +80,7 @@ int main (int argc, char** argv)
 {
     if (argc != 5 && argc != 6)
     {
-        std::fprintf (stderr, "usage: HypraRenderEvents <events.txt> <out.f32> <rate> <seconds> [stereo]\n");
+        std::fprintf (stderr, "usage: TranceraRenderEvents <events.txt> <out.f32> <rate> <seconds> [stereo]\n");
         return 2;
     }
     const double rate = std::stod (argv[3]);

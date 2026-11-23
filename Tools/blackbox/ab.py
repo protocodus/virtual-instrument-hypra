@@ -1,6 +1,6 @@
 import sys,os,subprocess; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from an import *
-import os; H=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','build-dsp','HypraRenderEvents');r=np.load('cap2.npz')
+import os; H=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','build-dsp','TranceraRenderEvents');r=np.load('cap2.npz')
 def ours(sets,note,dur):
     ev=['0 node digital','0 set balance -64','0 set amp.a 0','0 set amp.s 127','0 set fenv.s 127','0 set velocityamp 0','0 set level 100','0 set filter.steep 0']+[f'0 set {k} {v}' for k,v in sets.items()]+[f'0.05 note {note} 100',f'{dur} off {note}']
     open('ev.txt','w').write('\n'.join(ev)+'\n');subprocess.run([H,'ev.txt','o.f32',str(SR),str(dur+.3)],check=True);return np.fromfile('o.f32','<f4').astype(float)

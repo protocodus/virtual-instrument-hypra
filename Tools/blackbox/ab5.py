@@ -19,11 +19,11 @@ for name,a,sets,notes,dur,extra,st in items:
     if a.shape[0]==1:a=np.vstack([a,a])
     if b.shape[0]==1:b=np.vstack([b,b])
     n=min(a.shape[1],b.shape[1],int((dur+LAT+0.1)*SR));a=a[:,:n];b=b[:,:n];g=a.std()/max(b.std(),1e-9)
-    for lab,x in (('A emulator',a),('B Hypra 0.4.1',b*g)):
+    for lab,x in (('A emulator',a),('B Trancera 0.4.1',b*g)):
         key.append(f'{t:6.1f} s  {lab:14s} {name}');out+=[x,gap];t+=(x.shape[1]+gap.shape[1])/SR
     out.append(gap);t+=gap.shape[1]/SR
 x=np.concatenate(out,1);x*=0.5/abs(x).max()
 dd=sys.argv[1];os.makedirs(dd,exist_ok=True)
 subprocess.run(['ffmpeg','-v','error','-y','-f','f32le','-ar',str(SR),'-ac','2','-i','-','-ar','48000','-c:a','pcm_s24le',dd+'/ab-round3-modulation.wav'],input=x.T.astype('<f4').tobytes(),check=True)
-open(dd+'/KEY.txt','w').write('A/B round 3: JE-8086 (JP-8000 firmware 1.05) against Hypra 0.4.1, digital output node.\nEach pair is emulator first, then Hypra, level-matched per pair. Only the auto-pan pair is real stereo.\n\n'+'\n'.join(key)+'\n')
+open(dd+'/KEY.txt','w').write('A/B round 3: JE-8086 (JP-8000 firmware 1.05) against Trancera 0.4.1, digital output node.\nEach pair is emulator first, then Trancera, level-matched per pair. Only the auto-pan pair is real stereo.\n\n'+'\n'.join(key)+'\n')
 print(open(dd+'/KEY.txt').read(),x.shape[1]/SR)

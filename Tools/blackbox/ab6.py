@@ -15,11 +15,11 @@ items=[('supersaw detune 124, mix 0',c8['sd_124'],{**S,'osc1.ctrl1':124,'osc1.ct
 gap=np.zeros(int(0.5*SR));out=[];key=[];t=0.0
 for name,a,sets,notes,dur in items:
     b=ours(sets,notes,dur);n=min(len(a),len(b),int((dur+LAT+0.1)*SR));a=a[:n];b=b[:n];g=a.std()/max(b.std(),1e-9)
-    for lab,x in (('A emulator',a),('B Hypra 0.5.0',b*g)):
+    for lab,x in (('A emulator',a),('B Trancera 0.5.0',b*g)):
         key.append(f'{t:6.1f} s  {lab:14s} {name}   (level trim on B: {20*np.log10(g):+.1f} dB)' if lab[0]=='B' else f'{t:6.1f} s  {lab:14s} {name}');out+=[x,gap];t+=(len(x)+len(gap))/SR
     out.append(gap);t+=len(gap)/SR
 x=np.concatenate(out);x*=0.5/abs(x).max()
 dd=sys.argv[1];os.makedirs(dd,exist_ok=True)
 subprocess.run(['ffmpeg','-v','error','-y','-f','f32le','-ar',str(SR),'-ac','1','-i','-','-ar','48000','-c:a','pcm_s24le',dd+'/ab-round4-oscillators.wav'],input=x.astype('<f4').tobytes(),check=True)
-open(dd+'/KEY.txt','w').write('A/B round 4: JE-8086 (JP-8000 firmware 1.05) against Hypra 0.5.0, digital output node.\nEach pair is emulator first, then Hypra, level-matched per pair; the trim shows how far the raw levels differ.\n\n'+'\n'.join(key)+'\n')
+open(dd+'/KEY.txt','w').write('A/B round 4: JE-8086 (JP-8000 firmware 1.05) against Trancera 0.5.0, digital output node.\nEach pair is emulator first, then Trancera, level-matched per pair; the trim shows how far the raw levels differ.\n\n'+'\n'.join(key)+'\n')
 print(open(dd+'/KEY.txt').read())

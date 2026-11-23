@@ -4,7 +4,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum supported macOS version")
 endif()
 
-project(Hypra VERSION 0.7.1 LANGUAGES CXX)
+project(Trancera VERSION 0.8.0 LANGUAGES CXX)
 
 # Source/DSP is C++17 and JUCE-free: the Rack Extension compiles it directly.
 set(CMAKE_CXX_STANDARD 17)
@@ -14,29 +14,29 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-option(HYPRA_ENABLE_SANITIZERS "Build everything with ASan and UBSan" OFF)
-if(HYPRA_ENABLE_SANITIZERS)
+option(TRANCERA_ENABLE_SANITIZERS "Build everything with ASan and UBSan" OFF)
+if(TRANCERA_ENABLE_SANITIZERS)
     add_compile_options(-fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined,float-cast-overflow)
 endif()
 
-add_library(HypraDSP STATIC Source/DSP/HypraEngine.cpp Source/DSP/HypraControls.cpp)
-target_include_directories(HypraDSP PUBLIC Source/DSP)
-target_compile_options(HypraDSP PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+add_library(TranceraDSP STATIC Source/DSP/TranceraEngine.cpp Source/DSP/TranceraControls.cpp)
+target_include_directories(TranceraDSP PUBLIC Source/DSP)
+target_compile_options(TranceraDSP PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
 
-add_executable(HypraTests Tests/EngineTests.cpp)
-target_link_libraries(HypraTests PRIVATE HypraDSP)
+add_executable(TranceraTests Tests/EngineTests.cpp)
+target_link_libraries(TranceraTests PRIVATE TranceraDSP)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Tools/RenderDemos.cpp")
-    add_executable(HypraRenderDemos Tools/RenderDemos.cpp)
-    target_link_libraries(HypraRenderDemos PRIVATE HypraDSP)
+    add_executable(TranceraRenderDemos Tools/RenderDemos.cpp)
+    target_link_libraries(TranceraRenderDemos PRIVATE TranceraDSP)
 endif()
 
-add_executable(HypraRenderEvents Tools/RenderEvents.cpp)
-target_link_libraries(HypraRenderEvents PRIVATE HypraDSP)
+add_executable(TranceraRenderEvents Tools/RenderEvents.cpp)
+target_link_libraries(TranceraRenderEvents PRIVATE TranceraDSP)
 
 enable_testing()
 foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls TriangleShape MultiFxTypes EnvelopeSmoother ToneSaturation Osc2AndSync)
-    add_test(NAME Hypra.${suite} COMMAND HypraTests ${suite})
-    set_tests_properties(Hypra.${suite} PROPERTIES LABELS unit)
+    add_test(NAME Trancera.${suite} COMMAND TranceraTests ${suite})
+    set_tests_properties(Trancera.${suite} PROPERTIES LABELS unit)
 endforeach()

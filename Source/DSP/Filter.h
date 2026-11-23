@@ -2,12 +2,12 @@
 #pragma once
 
 #include "Core.h"
-#include "HypraPatch.h"
+#include "TranceraPatch.h"
 #include "Mapping.h"
 
 #include <array>
 
-namespace hypra
+namespace trancera
 {
 class Filter
 {
@@ -66,4 +66,4 @@ private:
     double f_ { 5.0 / 128.0 }, fTarget_ { 5.0 / 128.0 }, fSmoothAlpha_ { 1.0 / 512.0 };
     double qHalf_ { 0.5 }, qHalfTarget_ { 0.5 }, comp12_ { 1.0 };
 };
-} // namespace hypra
+} // namespace trancera

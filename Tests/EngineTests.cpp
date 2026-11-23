@@ -1,8 +1,8 @@
 // Behavioural checks for the proof of concept. Each expectation cites what
 // pins it: the JP-8000 owner's manual (OM), the service notes (SN), or
 // Szabo 2010 (a black-box measurement of the hardware).
-#include "../Source/DSP/HypraControls.h"
-#include "../Source/DSP/HypraEngine.h"
+#include "../Source/DSP/TranceraControls.h"
+#include "../Source/DSP/TranceraEngine.h"
 
 #include <algorithm>
 #include <complex>
@@ -35,7 +35,7 @@ void near (double value, double expected, double tolerance, const std::string& w
            what + ": " + std::to_string (value) + " expected " + std::to_string (expected));
 }
 
-using namespace hypra;
+using namespace trancera;
 constexpr double fs = kEngineRate;
 
 // Amplitude of one frequency through a Blackman-Harris window.

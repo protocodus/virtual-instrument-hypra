@@ -6,7 +6,7 @@
 #include <array>
 #include <vector>
 
-namespace hypra
+namespace trancera
 {
 class Resampler
 {
@@ -90,4 +90,4 @@ private:
     double position_ { 0.0 }, step_ { 1.0 };
     int write_ { 0 };
 };
-} // namespace hypra
+} // namespace trancera

@@ -1,4 +1,4 @@
-"""Factory patches on JE-8086 against Hypra: read each program's part A settings,
+"""Factory patches on JE-8086 against Trancera: read each program's part A settings,
 play the same phrase on both, save captures and the settings."""
 import sys,os,json; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np,mido,jh

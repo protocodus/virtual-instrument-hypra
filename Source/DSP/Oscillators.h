@@ -2,12 +2,12 @@
 #pragma once
 
 #include "Core.h"
-#include "HypraPatch.h"
+#include "TranceraPatch.h"
 #include "Mapping.h"
 
 #include <array>
 
-namespace hypra
+namespace trancera
 {
 namespace osc
 {
@@ -485,4 +485,4 @@ private:
     double last2_ { 0.0 }, fmGain_ { 0.0 }, dc_ { 0.0 };
     bool fm_ { false }, freshSmooth_ { true };
 };
-} // namespace hypra
+} // namespace trancera

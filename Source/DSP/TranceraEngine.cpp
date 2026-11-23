@@ -1,6 +1,6 @@
-#include "HypraEngine.h"
+#include "TranceraEngine.h"
 
-namespace hypra
+namespace trancera
 {
 namespace
 {
@@ -484,4 +484,4 @@ void Engine::render (float* left, float* right, int frames) noexcept
         right[i] = static_cast<float> (volume_ * out.r);
     }
 }
-} // namespace hypra
+} // namespace trancera

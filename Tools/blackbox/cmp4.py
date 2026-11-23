@@ -1,7 +1,7 @@
 import sys,os,subprocess; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np;from an3 import *
 from an import amp as tone
-import os; H=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','build-dsp','HypraRenderEvents')
+import os; H=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','build-dsp','TranceraRenderEvents')
 d=np.load('cap6.npz');LAT=0.0957
 BASE=['0 node digital','0 set balance -64','0 set amp.a 0','0 set amp.s 127','0 set amp.r 0','0 set fenv.s 127','0 set velocityamp 0','0 set level 100','0 set filter.steep 0','0 set fenv.a 0','0 set envdepth 0']
 TRI={'osc1.wave':6,'osc1.ctrl1':0}

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace hypra
+namespace trancera
 {
 enum class Wave1 : std::uint8_t { SuperSaw, TriangleMod, Noise, FeedbackOsc, Square, Saw, Triangle };
 enum class Wave2 : std::uint8_t { Square, Saw, Triangle };
@@ -97,4 +97,4 @@ struct Patch
     bool unison { false };
     int unisonDetune { 12 }; // cents
 };
-} // namespace hypra
+} // namespace trancera

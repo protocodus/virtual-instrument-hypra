@@ -1,7 +1,7 @@
 import sys,os,json,subprocess; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np,presets_map as m
 SR=88200;LAT=0.0957;P=sys.argv[1];OUTD=sys.argv[2]
-H=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','build-dsp','HypraRenderEvents')
+H=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','build-dsp','TranceraRenderEvents')
 V=os.environ.get('PLAIN','');d=json.load(open(f'{P}/presets{V}.json'))
 def ours(params,notes,dur=6.5):
     ev=['0 node digital']+m.events(params);tl=[]
@@ -26,9 +26,9 @@ for k,v in d.items():
     env=20*np.log10((np.abs(ea-eb).mean()+1e-9)/(ea.mean()+1e-9))
     nm=m.name(v['params']);rows.append((nm,raw,tilt_lo,tilt_mid,tilt_hi,env))
     print(f'{nm:16s} level ours-emu {raw:+5.1f} dB | tone (level-matched) <300 Hz {tilt_lo:+5.1f}  0.3-3k {tilt_mid:+5.1f}  >3k {tilt_hi:+5.1f} dB | envelope error {env:+5.1f} dB',flush=True)
-    for lab,x in (('A emulator',a),('B Hypra 0.6.2',b*g)):
+    for lab,x in (('A emulator',a),('B Trancera 0.6.2',b*g)):
         key.append(f'{t:6.1f} s  {lab:14s} {k:>3s} {nm}'+(f'   (raw level {raw:+.1f} dB)' if lab[0]=='B' else ''));out+=[x,gap];t+=(x.shape[1]+gap.shape[1])/SR
 x=np.concatenate(out,1);x*=0.5/abs(x).max();os.makedirs(OUTD,exist_ok=True)
 subprocess.run(['ffmpeg','-v','error','-y','-f','f32le','-ar',str(SR),'-ac','2','-i','-','-ar','48000','-c:a','pcm_s24le',f'{OUTD}/ab-factory-patches.wav'],input=x.T.astype('<f4').tobytes(),check=True)
-txt='A/B: JE-8086 factory patches (part A, played SINGLE) against Hypra 0.6.2 with the same settings, digital output, stereo.\nPhrase: Am F C G chords, then an eight-note line. Emulator first; Hypra level-matched per patch (raw level difference noted).\nVelocity is 100 on both; Hypra has no velocity matrix.\n\n'+'\n'.join(key)+'\n\nPer patch: raw level, tone difference by region after level matching, envelope error (mean abs difference of 10 ms envelopes over mean level):\n'+'\n'.join(f'{r[0]:16s} level {r[1]:+5.1f} dB | <300 Hz {r[2]:+5.1f} | 0.3-3 kHz {r[3]:+5.1f} | >3 kHz {r[4]:+5.1f} | envelope {r[5]:+5.1f} dB' for r in rows)+'\n'
+txt='A/B: JE-8086 factory patches (part A, played SINGLE) against Trancera 0.6.2 with the same settings, digital output, stereo.\nPhrase: Am F C G chords, then an eight-note line. Emulator first; Trancera level-matched per patch (raw level difference noted).\nVelocity is 100 on both; Trancera has no velocity matrix.\n\n'+'\n'.join(key)+'\n\nPer patch: raw level, tone difference by region after level matching, envelope error (mean abs difference of 10 ms envelopes over mean level):\n'+'\n'.join(f'{r[0]:16s} level {r[1]:+5.1f} dB | <300 Hz {r[2]:+5.1f} | 0.3-3 kHz {r[3]:+5.1f} | >3 kHz {r[4]:+5.1f} | envelope {r[5]:+5.1f} dB' for r in rows)+'\n'
 open(f'{OUTD}/KEY.txt','w').write(txt);print(len(x[0])/SR,'s')

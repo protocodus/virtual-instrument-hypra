@@ -1,12 +1,12 @@
 // Renders the proof-of-concept listening material: original phrases played
 // by the engine, 48 kHz / 24 bit, with no external processing.
 //
-//   HypraRenderDemos <output-directory>
+//   TranceraRenderDemos <output-directory>
 //
 // 00 sums several engine instances at the fader gains written beside them.
 // Every other demo is one instance. The A/B pair is matched on whole-file
 // RMS by turning the louder file down; nothing else is trimmed.
-#include "HypraEngine.h"
+#include "TranceraEngine.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-using namespace hypra;
+using namespace trancera;
 
 namespace
 {
@@ -619,14 +619,14 @@ int main (int argc, char** argv)
 {
     if (argc != 2)
     {
-        std::fprintf (stderr, "usage: HypraRenderDemos <output-directory>\n");
+        std::fprintf (stderr, "usage: TranceraRenderDemos <output-directory>\n");
         return 2;
     }
     const std::string dir = argv[1];
     std::filesystem::create_directories (dir + "/ab-output-stage");
 
     const std::pair<const char*, Audio (*)()> demos[] {
-        { "00-full-track-all-hypra", song },
+        { "00-full-track-all-trancera", song },
         { "01-supersaw-lead", supersawLead },
         { "02-supersaw-pad", pad },
         { "03-supersaw-detune-then-mix", detuneAndMix },

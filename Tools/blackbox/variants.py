@@ -1,4 +1,4 @@
-"""One factory program on JE-8086 and Hypra with settings overridden one at a time.
+"""One factory program on JE-8086 and Trancera with settings overridden one at a time.
 usage: variants.py PROG OUTDIR 'label:param=value,param=value;label:...'  (values are the knob value;
 bipolar controls take -64..63). Captures one held note (57, 2 s) per variant on both."""
 import sys,os,json,subprocess; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +31,7 @@ def capture():
     json.dump(jh.session(work),open(f'{OUT}/variants.json','w'))
 def compare():
     import presets_map as m
-    H=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','build-dsp','HypraRenderEvents')
+    H=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','build-dsp','TranceraRenderEvents')
     d=json.load(open(f'{OUT}/variants.json'))
     B=[63*2**(k/2) for k in range(0,17)]
     def bands(x):

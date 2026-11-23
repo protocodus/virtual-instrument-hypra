@@ -2,13 +2,13 @@
 #pragma once
 
 #include "Core.h"
-#include "HypraPatch.h"
+#include "TranceraPatch.h"
 #include "Mapping.h"
 
 #include <array>
 #include <vector>
 
-namespace hypra
+namespace trancera
 {
 class ToneControl
 {
@@ -273,4 +273,4 @@ private:
     double lvl_ { 0.0 }, lvlTarget_ { 0.0 }, phase_ { 0.0 };
     double lpIn_ { 0.0 }, fbLp_ { 0.0 }, dc_ { 0.0 }, wetL_ { 0.0 }, wetR_ { 0.0 };
 };
-} // namespace hypra
+} // namespace trancera

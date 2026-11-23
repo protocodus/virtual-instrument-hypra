@@ -14,11 +14,11 @@ items=[('tone bass +63 on noise',c['st_tone_b+63_t+00'],{**NZ,'bass':63},[(0.05,
 gap=np.zeros((2,int(0.5*SR)));out=[];key=[];t=0.0
 for name,a,sets,notes,dur in items:
     b=ours(sets,notes,dur,stereo=True);n=min(a.shape[1],b.shape[1],int((dur+LAT+0.1)*SR));a=a[:,:n];b=b[:,:n];g=a.std()/max(b.std(),1e-9)
-    for lab,x in (('A emulator',a),('B Hypra 0.6.0',b*g)):
+    for lab,x in (('A emulator',a),('B Trancera 0.6.0',b*g)):
         key.append(f'{t:6.1f} s  {lab:14s} {name}'+(f'   (trim on B {20*np.log10(g):+.1f} dB)' if lab[0]=='B' else ''));out+=[x,gap];t+=(x.shape[1]+gap.shape[1])/SR
     out.append(gap);t+=gap.shape[1]/SR
 x=np.concatenate(out,1);x*=0.5/abs(x).max()
 dd=sys.argv[1];os.makedirs(dd,exist_ok=True)
 subprocess.run(['ffmpeg','-v','error','-y','-f','f32le','-ar',str(SR),'-ac','2','-i','-','-ar','48000','-c:a','pcm_s24le',dd+'/ab-round5-effects.wav'],input=x.T.astype('<f4').tobytes(),check=True)
-open(dd+'/KEY.txt','w').write('A/B round 5: JE-8086 against Hypra 0.6.0, digital output node, stereo. Emulator first in each pair, level-matched.\n\n'+'\n'.join(key)+'\n')
+open(dd+'/KEY.txt','w').write('A/B round 5: JE-8086 against Trancera 0.6.0, digital output node, stereo. Emulator first in each pair, level-matched.\n\n'+'\n'.join(key)+'\n')
 print(open(dd+'/KEY.txt').read())

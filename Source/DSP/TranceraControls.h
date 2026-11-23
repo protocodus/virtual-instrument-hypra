@@ -6,12 +6,12 @@
 // patches, so a new control is appended.
 #pragma once
 
-#include "HypraPatch.h"
+#include "TranceraPatch.h"
 
 #include <array>
 #include <cstddef>
 
-namespace hypra
+namespace trancera
 {
 struct ControlInfo
 {
@@ -102,4 +102,4 @@ inline constexpr std::array<ControlInfo, kControlCount> kControls { {
 void applyControl (Patch& patch, int control, int value) noexcept;
 // A control's value in a patch.
 [[nodiscard]] int controlValue (const Patch& patch, int control) noexcept;
-} // namespace hypra
+} // namespace trancera

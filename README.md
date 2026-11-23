@@ -1,16 +1,18 @@
-# Hypra
+# Trancera
 
-Hypra is a proof of concept of an eight-voice virtual-analog synthesizer
+Trancera is a proof of concept of an eight-voice virtual-analog synthesizer
 modelling the Roland JP-8000 (1997), meant to become a Reason Rack Extension
-once its sound is approved. "Hypra" is a working name. It is an independent
+once its sound is approved. The owner named it Trancera on 2026-11-23 (it was
+Hypra until then). It is an independent
 original implementation, not affiliated with or licensed by Roland, and holds
 no firmware, ROM data, samples, captured audio or factory patch data. Since
 2026-11-23 it is not clean-room: at the owner's risk, constants may be taken
 from an analysis of the JP-8000 firmware (tagged `[firmware]`).
 
-**Status: 0.7.1, for listening.** The engine is complete enough to judge the
-sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
-mode or motion control. The saw, pulse and triangle-mod waveforms and the
+**Status: 0.8.0, for listening.** The engine is complete enough to judge the
+sound. Its Rack Extension is `Examples/Trancera` in protocodus/reason-rack-extensions.
+There is no plug-in, factory preset bank, arpeggiator, split mode or motion
+control. The saw, pulse and triangle-mod waveforms and the
 filter are fitted to an emulator running the JP-8000's own system software,
 played as a black box, and agree with it within 0.2 dB. So are the
 envelopes, both LFOs, FADE, the modulation depths, pan, OSC BALANCE, key
@@ -70,9 +72,10 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.8.0 | Renamed from Hypra to Trancera (owner, 2026-11-23): the `trancera` namespace, `Source/DSP/Trancera*` files, the `TranceraDSP` library and the repository. No change to the sound. |
 | 0.7.1 | The triangle-mod sine table is built at compile time, so the engine holds no global with a run-time initialiser (the Rack Extension toolchain refuses one). No audible change: the table differs from `std::sin` by under 1e-15. |
-| 0.7.0 | `Source/DSP/HypraControls.h` lists the patch as 57 front-panel controls (ids, ranges, defaults) for every front end, with `applyControl` and `controlValue`; the engine takes a host's master tuning (`setTune`). No change to the sound. |
-| 0.6.2 | Key follow tracks the pitch after OSC SHIFT; LFO 1 and the pitch envelope reach X-MOD on the pitch-depth curve (they were about a hundred times too strong); effect and delay LEVEL are square-law with a per-type chorus wet gain. Found by playing factory patches on JE-8086 and Hypra. |
+| 0.7.0 | `Source/DSP/TranceraControls.h` lists the patch as 57 front-panel controls (ids, ranges, defaults) for every front end, with `applyControl` and `controlValue`; the engine takes a host's master tuning (`setTune`). No change to the sound. |
+| 0.6.2 | Key follow tracks the pitch after OSC SHIFT; LFO 1 and the pitch envelope reach X-MOD on the pitch-depth curve (they were about a hundred times too strong); effect and delay LEVEL are square-law with a per-type chorus wet gain. Found by playing factory patches on JE-8086 and Trancera. |
 | 0.6.1 | Amp SUSTAIN is square-law, as JE-8086 plays it (found by playing ten factory patches on both); the event renderer takes every patch field. |
 | 0.6.0 | TONE CONTROL is the measured pair of first-order shelves (treble from 940 Hz, bass below 435 Hz, up to +29 dB at full bass); delay times, feedback and echo levels follow JE-8086, PANNING SHORT answers right first; the two FREEZE PHASE combs take the measured lengths. |
 | 0.5.0 | Supersaw Detune follows JE-8086 at every value (steps from 34, a steep climb from 120) and its level drops 1.4 dB; ring modulation 3.6 dB quieter; the feedback oscillator howls exactly on the harmonic JE-8086 picks for each HARMONICS setting, from the same AMOUNT. |
@@ -91,7 +94,7 @@ or inferred here.
 cmake -S . -B build-dsp -DCMAKE_BUILD_TYPE=Release
 cmake --build build-dsp --parallel 2
 ctest --test-dir build-dsp --output-on-failure
-./build-dsp/HypraRenderDemos deliverables/demos
+./build-dsp/TranceraRenderDemos deliverables/demos
 python3 Tools/panel/render_front.py
 ```
 
