@@ -351,7 +351,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
     const double common = v.pitch + v.detune + 12.0 * std::clamp (p.oscShift, -2, 2)
                           + bend_ * (bend_ >= 0.0 ? p.bendUp : p.bendDown)
                           + mod_ * mapping::pitchLfoSemitones (p.lfo2.pitch) * s.lfo2
-                          + (part == 1 ? partDetune_ / 100.0 : 0.0);
+                          + (part == 1 ? partDetune_ / 100.0 : 0.0) + tune_;
     const double pitch1 = common + (p.destination == ModDestination::Osc1And2 ? semis : 0.0);
     const double pitch2 = common + mapping::osc2Semitones (p.osc2) + (toXmod ? 0.0 : semis);
 

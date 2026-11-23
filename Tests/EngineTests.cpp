@@ -1,6 +1,7 @@
 // Behavioural checks for the proof of concept. Each expectation cites what
 // pins it: the JP-8000 owner's manual (OM), the service notes (SN), or
 // Szabo 2010 (a black-box measurement of the hardware).
+#include "../Source/DSP/HypraControls.h"
 #include "../Source/DSP/HypraEngine.h"
 
 #include <algorithm>
@@ -675,6 +676,50 @@ void effectLevels()
     near (mapping::chorusWetGain (ChorusType::SuperFast), 0.079, 1e-9, "SUPER CHORUS FST adds almost no level");
     near (mapping::chorusWetGain (ChorusType::SuperSlow), 1.402, 1e-9, "SUPER CHORUS SLW adds 4 dB at 127");
 }
+
+// The flat control list every front end uses: unique ids, every value of every
+// control lands in the patch and reads back, and the initial values are the
+// default patch's.
+void controls()
+{
+    const Patch defaults;
+    for (int c = 0; c < kControlCount; ++c)
+    {
+        const ControlInfo& info = kControls[static_cast<std::size_t> (c)];
+        near (controlValue (defaults, c), info.initial, 0, std::string (info.id) + " starts at the default patch's value");
+        check (info.steps == 0 || info.steps == info.max - info.min + 1, std::string (info.id) + ": a choice has one step a value");
+        for (int other = 0; other < c; ++other)
+            check (std::string (kControls[static_cast<std::size_t> (other)].id) != info.id, std::string (info.id) + " is unique");
+        bool roundTrip = true;
+        for (int v = info.min; v <= info.max; ++v)
+        {
+            Patch p;
+            applyControl (p, c, v);
+            roundTrip = roundTrip && controlValue (p, c) == v;
+        }
+        check (roundTrip, std::string (info.id) + " reads back every value");
+        Patch p;
+        applyControl (p, c, info.max + 1000);
+        near (controlValue (p, c), info.max, 0, std::string (info.id) + " clamps");
+    }
+    // A host's master tuning moves every note.
+    const auto pitchOf = [] (double cents)
+    {
+        Patch p;
+        p.osc1.wave = Wave1::Triangle;
+        p.balance = -64;
+        Engine e;
+        e.prepare (fs);
+        e.setTune (cents);
+        e.setPatch (Part::Upper, p);
+        e.noteOn (69, 100);
+        std::vector<float> l (static_cast<std::size_t> (fs)), r (l.size());
+        e.render (l.data(), r.data(), static_cast<int> (l.size()));
+        std::vector<double> x (l.begin() + 22050, l.end());
+        return peakHz (x, 400, 480, 0.25);
+    };
+    near (1200.0 * std::log2 (pitchOf (50.0) / pitchOf (0.0)), 50.0, 1.5, "master tune +50 cents");
+}
 } // namespace
 
 void* operator new (std::size_t size)
@@ -692,7 +737,7 @@ int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
-        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels } };
+        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

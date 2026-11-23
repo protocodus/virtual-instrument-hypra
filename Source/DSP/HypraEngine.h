@@ -28,6 +28,8 @@ public:
     void setPartDetune (int cents) noexcept { partDetune_ = std::clamp (cents, -50, 50); }
     void setOutputNode (OutputNode node) noexcept { output_.prepare (node); }
     void setVolume (double gain) noexcept { volume_ = std::clamp (gain, 0.0, 2.0); }
+    // A host's master tuning, in cents, on every note (held ones too).
+    void setTune (double cents) noexcept { tune_ = std::clamp (cents, -100.0, 100.0) / 100.0; }
 
     void noteOn (int note, int velocity) noexcept;
     void noteOff (int note) noexcept;
@@ -92,7 +94,7 @@ private:
     KeyMode mode_ { KeyMode::Single };
     std::uint32_t seed_ { 8000 };
     std::uint64_t order_ { 0 };
-    double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, dcPole_ { 0.9997 };
+    double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, dcPole_ { 0.9997 }, tune_ { 0.0 };
     int partDetune_ { 0 }, untilControl_ { 0 };
     bool sustain_ { false };
 };
