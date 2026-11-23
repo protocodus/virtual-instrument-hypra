@@ -43,7 +43,7 @@ def compare():
     print('band (Hz)        ',' '.join(f'{int(b):5d}' for b in B[S]))
     for label,params in d.items():
         a=np.load(f'{OUT}/v_{label}.npy').astype(float)
-        ev=['0 node digital']+m.events(params)+[f'0.05 note {n} {VEL}' for n in NOTES]+[f'2.05 off {n}' for n in NOTES]
+        ev=['0 node digital']+m.events(params,matrix=True)+[f'0.05 note {n} {VEL}' for n in NOTES]+[f'2.05 off {n}' for n in NOTES]
         open(f'{OUT}/ev.txt','w').write('\n'.join(ev)+'\n');subprocess.run([H,f'{OUT}/ev.txt',f'{OUT}/o.f32',str(SR),'2.6','stereo'],check=True)
         b=np.fromfile(f'{OUT}/o.f32','<f4').astype(float).reshape(-1,2).T;b=np.concatenate([np.zeros((2,int(LAT*SR))),b],1)
         ba=bands(a);bb=bands(b)
