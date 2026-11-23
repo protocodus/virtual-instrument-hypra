@@ -1,0 +1,668 @@
+wait 8
+perf 10 0
+perf 17 0
+patch 47 1
+patch 1e 5
+patch 1f 0
+patch 29 127
+on 60 100
+wait 0.5
+dump idleA
+wait 0.3
+dump idleB
+patch 11 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p11_20
+patch 11 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p11_100
+patch 11 64
+wait 0.05
+patch 12 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p12_20
+patch 12 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p12_100
+patch 12 64
+wait 0.05
+patch 13 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p13_20
+patch 13 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p13_100
+patch 13 64
+wait 0.05
+patch 15 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p15_20
+patch 15 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p15_100
+patch 15 64
+wait 0.05
+patch 16 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p16_20
+patch 16 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p16_100
+patch 16 64
+wait 0.05
+patch 17 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p17_20
+patch 17 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p17_100
+patch 17 64
+wait 0.05
+patch 19 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p19_20
+patch 19 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p19_100
+patch 19 64
+wait 0.05
+patch 1b 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p1b_20
+patch 1b 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p1b_100
+patch 1b 64
+wait 0.05
+patch 1c 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p1c_20
+patch 1c 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p1c_100
+patch 1c 64
+wait 0.05
+patch 1d 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p1d_20
+patch 1d 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p1d_100
+patch 1d 64
+wait 0.05
+patch 1f 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p1f_20
+patch 1f 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p1f_100
+patch 1f 64
+wait 0.05
+patch 20 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p20_20
+patch 20 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p20_100
+patch 20 64
+wait 0.05
+patch 23 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p23_20
+patch 23 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p23_100
+patch 23 64
+wait 0.05
+patch 24 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p24_20
+patch 24 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p24_100
+patch 24 64
+wait 0.05
+patch 25 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p25_20
+patch 25 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p25_100
+patch 25 64
+wait 0.05
+patch 27 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p27_20
+patch 27 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p27_100
+patch 27 64
+wait 0.05
+patch 28 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p28_20
+patch 28 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p28_100
+patch 28 64
+wait 0.05
+patch 29 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p29_20
+patch 29 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p29_100
+patch 29 64
+wait 0.05
+patch 2a 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2a_20
+patch 2a 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2a_100
+patch 2a 64
+wait 0.05
+patch 2b 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2b_20
+patch 2b 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2b_100
+patch 2b 64
+wait 0.05
+patch 2c 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2c_20
+patch 2c 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2c_100
+patch 2c 64
+wait 0.05
+patch 2e 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2e_20
+patch 2e 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2e_100
+patch 2e 64
+wait 0.05
+patch 2f 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2f_20
+patch 2f 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p2f_100
+patch 2f 64
+wait 0.05
+patch 30 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p30_20
+patch 30 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p30_100
+patch 30 64
+wait 0.05
+patch 31 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p31_20
+patch 31 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p31_100
+patch 31 64
+wait 0.05
+patch 32 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p32_20
+patch 32 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p32_100
+patch 32 64
+wait 0.05
+patch 33 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p33_20
+patch 33 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p33_100
+patch 33 64
+wait 0.05
+patch 34 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p34_20
+patch 34 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p34_100
+patch 34 64
+wait 0.05
+patch 36 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p36_20
+patch 36 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p36_100
+patch 36 64
+wait 0.05
+patch 37 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p37_20
+patch 37 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p37_100
+patch 37 64
+wait 0.05
+patch 38 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p38_20
+patch 38 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p38_100
+patch 38 64
+wait 0.05
+patch 39 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p39_20
+patch 39 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p39_100
+patch 39 64
+wait 0.05
+patch 3b 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3b_20
+patch 3b 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3b_100
+patch 3b 64
+wait 0.05
+patch 3c 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3c_20
+patch 3c 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3c_100
+patch 3c 64
+wait 0.05
+patch 3d 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3d_20
+patch 3d 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3d_100
+patch 3d 64
+wait 0.05
+patch 3e 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3e_20
+patch 3e 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3e_100
+patch 3e 64
+wait 0.05
+patch 3f 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3f_20
+patch 3f 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p3f_100
+patch 3f 64
+wait 0.05
+patch 40 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p40_20
+patch 40 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p40_100
+patch 40 64
+wait 0.05
+patch 41 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p41_20
+patch 41 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p41_100
+patch 41 64
+wait 0.05
+patch 42 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p42_20
+patch 42 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p42_100
+patch 42 64
+wait 0.05
+patch 46 20
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p46_20
+patch 46 100
+wait 0.05
+off 60
+wait 0.05
+on 60 100
+wait 0.3
+dump p46_100
+patch 46 64
+wait 0.05
