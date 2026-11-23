@@ -26,13 +26,15 @@ inline std::uint32_t increment (double hz) noexcept
 
 inline double unitPhase (std::uint32_t phase) noexcept { return phase * phaseScale; }
 
+// Built at compile time: the Rack Extension toolchain refuses a global with a
+// run-time initialiser, so the table is a constant and its sine a series.
 class SineTable
 {
 public:
-    SineTable() noexcept
+    constexpr SineTable() noexcept
     {
         for (std::size_t i = 0; i < values_.size(); ++i)
-            values_[i] = std::sin (kTwoPi * static_cast<double> (i) / size);
+            values_[i] = series (kTwoPi * static_cast<double> (i) / size);
     }
 
     double operator() (double cycles) const noexcept
@@ -44,10 +46,30 @@ public:
 
 private:
     static constexpr int size = 2048;
+
+    // sin x for x in [0, 2 pi]: folded to [-pi/2, pi/2], then Taylor's series
+    // to its 25th power (an error below 1e-15 there).
+    static constexpr double series (double x) noexcept
+    {
+        if (x > kPi)
+            x -= kTwoPi;
+        if (x > 0.5 * kPi)
+            x = kPi - x;
+        else if (x < -0.5 * kPi)
+            x = -kPi - x;
+        double term = x, sum = x;
+        for (int n = 1; n < 13; ++n)
+        {
+            term *= -x * x / ((2.0 * n) * (2.0 * n + 1.0));
+            sum += term;
+        }
+        return sum;
+    }
+
     std::array<double, size + 1> values_ {};
 };
 
-inline const SineTable sine;
+inline constexpr SineTable sine;
 
 inline double triangle (double p) noexcept { return 1.0 - 4.0 * std::abs (p - 0.5); }
 

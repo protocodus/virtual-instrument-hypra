@@ -8,7 +8,7 @@ no firmware, ROM data, samples, captured audio or factory patch data. Since
 2026-11-23 it is not clean-room: at the owner's risk, constants may be taken
 from an analysis of the JP-8000 firmware (tagged `[firmware]`).
 
-**Status: 0.7.0, for listening.** The engine is complete enough to judge the
+**Status: 0.7.1, for listening.** The engine is complete enough to judge the
 sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
 mode or motion control. The saw, pulse and triangle-mod waveforms and the
 filter are fitted to an emulator running the JP-8000's own system software,
@@ -70,6 +70,7 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.7.1 | The triangle-mod sine table is built at compile time, so the engine holds no global with a run-time initialiser (the Rack Extension toolchain refuses one). No audible change: the table differs from `std::sin` by under 1e-15. |
 | 0.7.0 | `Source/DSP/HypraControls.h` lists the patch as 57 front-panel controls (ids, ranges, defaults) for every front end, with `applyControl` and `controlValue`; the engine takes a host's master tuning (`setTune`). No change to the sound. |
 | 0.6.2 | Key follow tracks the pitch after OSC SHIFT; LFO 1 and the pitch envelope reach X-MOD on the pitch-depth curve (they were about a hundred times too strong); effect and delay LEVEL are square-law with a per-type chorus wet gain. Found by playing factory patches on JE-8086 and Hypra. |
 | 0.6.1 | Amp SUSTAIN is square-law, as JE-8086 plays it (found by playing ten factory patches on both); the event renderer takes every patch field. |
