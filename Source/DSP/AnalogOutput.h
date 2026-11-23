@@ -23,7 +23,8 @@
 // (Docs/research/hardware-ab-2026-11-22.md).
 //
 // Small signal, ideal op-amps, high-impedance load. Gains are normalised to
-// unity at 1 kHz on the rack node; no noise or op-amp clipping is invented.
+// unity at 1 kHz on the rack node. AnalogColor adds the DAC's truncation and
+// ladder error and the op-amp's soft limit (on by default); no noise is added.
 #pragma once
 
 #include "Core.h"
@@ -37,9 +38,47 @@ namespace trancera
 // Digital is the DAC word itself, for comparing with an emulator's output.
 enum class OutputNode : std::uint8_t { Rack, KeyboardAsPrinted, Digital };
 
+// The DAC's and the op-amps' own colour, on top of the linear circuit: the
+// DSP's word truncated rather than rounded into the 18-bit DAC, the R-2R
+// ladder's bit-weight error (deterministic, zero at code 0 and zero mean), and
+// the jack stage's op-amp rounding off peaks as they near its rail. No
+// noise is added. Off, the stage is the ideal small-signal circuit above.
+// [inferred] The headroom (1.35 x DAC full scale, from ~1.5 V of swing above a
+// ~2.8 V peak DAC output) and the ladder error (0.75 LSB peak) are typical
+// figures, not measured on a unit.
+struct AnalogColor
+{
+    bool on { true };
+    double opAmpHeadroom { 1.35 }; // relative to DAC full scale at the jack (1 kHz unity)
+    double dacDnlLsb { 0.75 };     // peak bit-weight error of the upper 8 bits, 18-bit LSBs
+};
+
 class AnalogOutput
 {
 public:
+    AnalogOutput() noexcept { setColor (color_); }
+
+    void setColor (const AnalogColor& color) noexcept
+    {
+        color_ = color;
+        // R-2R error per upper-8-bit segment: a fixed pseudo-random pattern,
+        // its mean removed and the segment holding code 0 exact, so silence
+        // stays exactly silent and there is no gain shift.
+        std::uint32_t state = 0x8086u;
+        double mean = 0.0;
+        for (double& e : ladder_)
+        {
+            state ^= state << 13; state ^= state >> 17; state ^= state << 5;
+            e = (static_cast<double> (state & 0xffffu) / 32767.5 - 1.0);
+            mean += e;
+        }
+        mean /= static_cast<double> (ladder_.size());
+        for (double& e : ladder_)
+            e = (e - mean) * color.dacDnlLsb / 131072.0;
+        ladder_[128] = 0.0;
+    }
+    const AnalogColor& color() const noexcept { return color_; }
+
     void prepare (OutputNode node) noexcept
     {
         node_ = node;
@@ -151,9 +190,15 @@ private:
         Stereo z_;
     };
 
-    static double convert (double x) noexcept
+    double convert (double x) const noexcept
     {
-        return std::clamp (std::nearbyint (x * 131072.0), -131072.0, 131071.0) / 131072.0;
+        if (! color_.on || node_ == OutputNode::Digital)
+            return std::clamp (std::nearbyint (x * 131072.0), -131072.0, 131071.0) / 131072.0;
+        // The DSP's 24-bit word framed to 18 bits by dropping its low bits (a
+        // floor), and the ladder's error for the code's upper eight bits.
+        const double code = std::clamp (std::floor (x * 131072.0), -131072.0, 131071.0);
+        const auto segment = static_cast<std::size_t> ((static_cast<std::int32_t> (code) + 131072) >> 10);
+        return code / 131072.0 + ladder_[segment];
     }
 
     Stereo analogue (Stereo v) noexcept
@@ -171,7 +216,21 @@ private:
         z_[0] = b_[1] * x - a_[0] * y + z_[1];
         z_[1] = b_[2] * x - a_[1] * y + z_[2];
         z_[2] = b_[3] * x - a_[2] * y;
-        return normalise_ * y;
+        const double rail = color_.on ? color_.opAmpHeadroom : 0.0;
+        if (rail <= 0.0)
+            return normalise_ * y;
+        // IC4A's output swing: exactly linear up to three quarters of the
+        // headroom, then a smooth knee (same slope at the joint) up to the rail.
+        return { swing (normalise_ * y.l, rail), swing (normalise_ * y.r, rail) };
+    }
+
+    static double swing (double u, double rail) noexcept
+    {
+        const double knee = 0.75 * rail, a = std::abs (u);
+        if (a <= knee)
+            return u;
+        const double span = rail - knee;
+        return std::copysign (knee + span * softClip ((a - knee) / span), u);
     }
 
     oversampling::Oversampling8<Stereo> over_;
@@ -184,5 +243,7 @@ private:
     std::size_t heldAt_ { 0 };
     std::array<Stereo, 4> couplingX_ {}, couplingY_ {};
     double normalise_ { 1.0 }, couplingPole_ { 1.0 }, couplingGain_ { 1.0 };
+    AnalogColor color_;
+    std::array<double, 256> ladder_ {};
 };
 } // namespace trancera

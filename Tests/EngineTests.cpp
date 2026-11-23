@@ -1025,12 +1025,73 @@ void* operator new (std::size_t size)
 void operator delete (void* p) noexcept { std::free (p); }
 void operator delete (void* p, std::size_t) noexcept { std::free (p); }
 
+// AnalogColor: transparent at normal levels, exact silence, the digital node
+// untouched, peaks near the rail rounded off, and deterministic.
+void analogColor()
+{
+    const auto run = [] (bool on, OutputNode node, double amp, double hz, std::vector<double>* right = nullptr)
+    {
+        AnalogOutput a;
+        AnalogColor c;
+        c.on = on;
+        a.setColor (c);
+        a.prepare (node);
+        std::vector<double> x (44100);
+        for (int i = -176400; i < 44100; ++i)
+        {
+            const Stereo y = a.process ({ amp * std::sin (kTwoPi * hz * i / fs), amp * std::sin (kTwoPi * hz * i / fs) });
+            if (i >= 0)
+            {
+                x[static_cast<std::size_t> (i)] = y.l;
+                if (right)
+                    (*right).push_back (y.r);
+            }
+        }
+        return x;
+    };
+    const auto thd = [] (const std::vector<double>& x, double hz)
+    {
+        double h = 0.0;
+        for (int k = 2; k <= 7; ++k)
+            h += std::pow (tone (x, hz * k), 2.0);
+        return std::sqrt (h) / tone (x, hz);
+    };
+    for (const double hz : { 50.0, 1000.0, 10000.0 })
+        near (db (tone (run (true, OutputNode::Rack, 0.25, hz), hz) / tone (run (false, OutputNode::Rack, 0.25, hz), hz)), 0.0, 0.01,
+              "colour is transparent at a quarter of full scale, " + std::to_string (hz));
+    check (thd (run (true, OutputNode::Rack, 0.25, 1000.0), 1000.0) < 1.0e-4, "no distortion at a quarter of full scale");
+
+    const auto hot = run (true, OutputNode::Rack, 0.99, 50.0), clean = run (false, OutputNode::Rack, 0.99, 50.0);
+    check (thd (hot, 50.0) > 1.0e-3 && thd (clean, 50.0) < 1.0e-4, "a full-scale bass note rounds off near the rail");
+    double peakHot = 0.0, peakClean = 0.0;
+    for (std::size_t i = 0; i < hot.size(); ++i)
+    {
+        peakHot = std::max (peakHot, std::abs (hot[i]));
+        peakClean = std::max (peakClean, std::abs (clean[i]));
+    }
+    check (peakHot < peakClean && peakHot < 1.35, "the rounded peak stays under the rail");
+
+    const auto silent = run (true, OutputNode::Rack, 0.0, 1000.0);
+    check (std::all_of (silent.begin(), silent.end(), [] (double v) { return v == 0.0; }), "silence stays exactly silent");
+    const auto digitalOn = run (true, OutputNode::Digital, 0.3, 1000.0), digitalOff = run (false, OutputNode::Digital, 0.3, 1000.0);
+    check (digitalOn == digitalOff, "the digital node ignores the colour");
+    std::vector<double> r1, r2;
+    const auto a1 = run (true, OutputNode::Rack, 0.7, 220.0, &r1), a2 = run (true, OutputNode::Rack, 0.7, 220.0, &r2);
+    check (a1 == a2 && r1 == r2, "deterministic");
+
+    Engine e;
+    e.prepare (48000.0);
+    std::vector<float> l (4096), r (4096);
+    e.render (l.data(), r.data(), 4096);
+    check (std::all_of (l.begin(), l.end(), [] (float v) { return v == 0.0f; }), "the engine is silent before a note with the colour on");
+}
+
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
-        { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy } };
+        { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy }, { "AnalogColor", analogColor } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

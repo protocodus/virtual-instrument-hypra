@@ -189,6 +189,12 @@ int main (int argc, char** argv)
             engine->setOutputNode (node == "printed" ? OutputNode::KeyboardAsPrinted
                                    : node == "digital" ? OutputNode::Digital : OutputNode::Rack);
         }
+        else if (kind == "analog")
+        {
+            int on;
+            words >> on;
+            engine->setAnalogColor (on != 0);
+        }
         else
         {
             std::fprintf (stderr, "unknown event %s\n", kind.c_str());
