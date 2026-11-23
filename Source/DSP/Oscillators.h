@@ -168,26 +168,28 @@ class NoiseOsc
 public:
     void reset() noexcept { filter_.reset(); }
 
-    // OM pp.55-56: low-passed noise that follows the key, silent with CUTOFF
-    // down and a sine with RESONANCE up. Both laws are [inferred].
+    // [measured] The main filter's -24 dB low-pass on white noise, its
+    // cutoff following the key (mapping::noiseCoefficient), RESONANCE on the
+    // main filter's table. Level against the saw: see noiseLevel.
     void configure (double hz, double cutoff, double resonance) noexcept
     {
-        const double fc = std::clamp (hz * std::exp2 (-5.0 + 11.0 * cutoff), 5.0, 0.45 * kEngineRate);
-        const double damping = 1.6 * (1.0 - resonance) * (1.0 - resonance) + 0.004;
-        filter_.configure (fc, damping);
-        const double ringing = std::min (8.0, 0.5 / std::sqrt (kPi * fc / (3.0 * kEngineRate * damping)));
-        const double r2 = resonance * resonance;
-        gain_ = (1.0 - r2 + r2 * ringing) * std::min (1.0, 20.0 * cutoff);
+        filter_.configure (mapping::noiseCoefficient (hz, cutoff), resonance, FilterType::LowPass, true);
+        // [measured] The level stays within 1 dB from RESONANCE 0 to 112,
+        // where the filter's own output (gain q) would rise 8-10 dB.
+        const double q = mapping::resonanceQ (resonance);
+        gain_ = noiseLevel * std::pow (q / mapping::resonanceQ (0.0), 0.33);
     }
 
     double process (Random& random) noexcept
     {
-        return softClip (gain_ * filter_.process (random.bipolarValue()).low);
+        return gain_ * filter_.process (random.bipolarValue());
     }
 
+    static constexpr double noiseLevel = 0.831; // -1.6 dB against the first fit
+
 private:
-    Svf filter_;
-    double gain_ { 1.0 };
+    Filter filter_;
+    double gain_ { noiseLevel };
 };
 
 // [inferred mechanism] OM p.56 says only that it resembles guitar feedback,
@@ -297,8 +299,8 @@ public:
             feedbackReady_ = true;
             feedback_.configure (c.hz1, c.ctrl1, c.ctrl2);
         }
-        // [inferred] linear, through-zero FM with a square-law depth.
-        fmDepth_ = 8.0 * c.xmod * c.xmod * c.hz1;
+        // [measured] Linear, through-zero FM in Hz, independent of either pitch.
+        fmDepth_ = mapping::crossModHz (c.xmod);
         // OM p.58: no cross modulation with SUPER SAW or NOISE.
         fm_ = c.xmod > 0.0 && c.wave1 != Wave1::SuperSaw && c.wave1 != Wave1::Noise;
     }
@@ -339,11 +341,10 @@ public:
         double second = 0.0;
         switch (c_.wave2)
         {
-            case Wave2::Square: second = 0.66 * osc::square (p2, c_.width2); break;
-            case Wave2::Saw: second = 0.8 * (2.0 * p2 - 1.0); break;
-            case Wave2::Triangle: second = 1.28 * osc::triangle (p2); break;
+            case Wave2::Square: second = osc::square (p2, c_.width2); last2_ = second; second *= 0.66; break;
+            case Wave2::Saw: second = 2.0 * p2 - 1.0; last2_ = second; second *= 0.8; break;
+            case Wave2::Triangle: second = osc::triangle (p2); last2_ = second; second *= 1.28; break;
         }
-        last2_ = second;
         if (c_.ring)
             second *= 1.6 * first;
         return c_.gain1 * first + c_.gain2 * second;

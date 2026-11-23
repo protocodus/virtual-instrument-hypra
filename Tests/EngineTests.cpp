@@ -540,6 +540,49 @@ void timing()
     near (12.0 * std::log2 (end / 523.2511), 0.0, 0.02, "glide lands on C5");
 }
 
+// Round 3 on JE-8086 (Docs/research/black-box-je8086-2026-11-22.md, "Round 3").
+void modulation()
+{
+    near (mapping::attackHoldSeconds (28), 0.0, 1e-12, "attack below 30 starts at once");
+    near (mapping::attackHoldSeconds (30), 0.014, 1e-12, "attack from 30 starts 14 ms late");
+    near (mapping::attackTau (16), 0.0042113 * std::exp (0.08069 * 16), 1e-12, "attack 16 is faster than the table");
+    near (mapping::attackTau (64), mapping::envelopeTau (64), 1e-12, "attack from 30 follows the table");
+    near (mapping::segmentHoldSeconds (5), 0.0, 1e-12, "decay and release below 10 start at once");
+    near (mapping::segmentHoldSeconds (16), 0.0075, 1e-12, "decay and release from 10 start 7.5 ms late");
+    near (mapping::segmentHoldSeconds (64), 0.025, 1e-12, "decay and release from 30 start 25 ms late");
+
+    Envelope env;
+    const double tau = mapping::envelopeTau (64);
+    env.configure (tau, tau, 0.0, tau, 0.014, 0.025, 0.025);
+    env.trigger();
+    int half = -1;
+    for (int i = 0; half < 0 && i < static_cast<int> (fs); ++i)
+        if (env.process() >= 0.5)
+            half = i;
+    near (half / fs, 0.014 + 0.509 * tau, 0.002, "held attack reaches half");
+
+    near (mapping::fadeSeconds (64), 2.176 / 4.45, 1e-3, "FADE 64 is full after 0.49 s");
+    near (mapping::fadeSeconds (0), 0.0, 1e-12, "FADE 0 is off");
+    near (db (mapping::fadeLevel (0.0, 1.0)), -37.0, 1e-6, "fade starts 37 dB down");
+    near (db (mapping::fadeLevel (0.5, 1.0)), -18.5, 1e-6, "fade rises in decibels");
+    near (mapping::fadeLevel (1.2, 1.0), 1.0, 1e-12, "fade stops at full");
+
+    near (mapping::lfo2Hz (0), 0.781, 1e-3, "LFO 2 rate 0");
+    near (mapping::lfo2Hz (64), 4.41, 0.03, "LFO 2 rate 64");
+    near (mapping::lfo2Hz (120), 19.99, 0.15, "LFO 2 rate 120");
+    near (mapping::lfo2Hz (127), 50.0, 1e-9, "LFO 2 rate 127 jumps to 50 Hz");
+
+    near (mapping::ampLfoDepth (32), 0.2873, 1e-3, "amp LFO depth 32 swings 29 %");
+    near (mapping::ampLfoDepth (63), 0.953, 1e-3, "amp LFO depth 63");
+    near (mapping::crossModHz (1.0), 8776.0, 1e-9, "X-MOD 127 swings 8.8 kHz");
+    near (mapping::balanceGain (0, true), std::sqrt (0.5), 1e-9, "balance centre is -3 dB each");
+    near (mapping::balanceGain (-64, true), 1.0, 1e-9, "balance OSC 1");
+    near (mapping::balanceGain (-64, false), 0.0, 1e-9, "balance OSC 1 mutes OSC 2");
+    near (mapping::balanceGain (32, false), std::sin (kPi / 4.0 * (1.0 + 32.0 / 63.0)), 1e-9, "balance is constant power");
+    near (mapping::noiseCoefficient (261.6256, 64.0 / 127.0), kTwoPi * 261.6256 / fs, 1e-12, "noise cutoff 64 sits on the note");
+    near (mapping::noiseCoefficient (261.6256, 76.0 / 127.0), 2.0 * kTwoPi * 261.6256 / fs, 1e-12, "noise cutoff, a semitone a step");
+}
+
 } // namespace
 
 void* operator new (std::size_t size)
@@ -557,7 +600,7 @@ int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
-        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing } };
+        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

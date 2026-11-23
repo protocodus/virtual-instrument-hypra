@@ -83,12 +83,10 @@ at 34 and 73 kHz.
 | --- | --- | --- |
 | Triangle SHAPE above 0 | a cusp, then a fold; captured but not yet modelled | a model that fits the captures |
 | Supersaw high-pass tracking | the same ratio and Q on every key and detune | a second recorded note |
-| Noise cutoff | key-following, 11 octaves, two poles | swept spectra |
 | Feedback oscillator | limited loop with a mode-selecting band-pass, its gains and bloom | dry recordings at several settings |
-| X-mod | linear through-zero FM, square-law depth | sidebands against depth |
 | Sync | reset on the sample | spectrum at high ratios |
-| Release below 10, attack below 32, the late envelope starts | the fast part of one exponential; no delay | finer captures |
-| LFO 1 FADE, LFO 2 rate, velocity | old guesses (LFO 2 uses the LFO 1 table) | black-box sweeps |
+| Release and decay below 10 | the fast part only, not the tail | finer captures |
+| Velocity matrix, ring modulation, LFO to X-MOD | old guesses | black-box sweeps |
 | Control rate | 2.76 kHz with interpolated cutoff and gain | stepping in a fast sweep |
 | Tone control | 12 dB at full travel | swept response |
 | Chorus and flanger types | names from the manual, settings chosen here | impulse response per type |

@@ -98,7 +98,7 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
                             && (! monophonic (s.patch) || unison (patch) != unison (s.patch));
     s.patch = patch;
     s.lfoStep = mapping::lfoHz (patch.lfo1.rate) / kControlRate;
-    s.lfo2Step = mapping::lfoHz (patch.lfo2.rate) / kControlRate;
+    s.lfo2Step = mapping::lfo2Hz (patch.lfo2.rate) / kControlRate;
     s.fade = mapping::fadeSeconds (patch.lfo1.fade);
     s.glideSeconds = patch.portamento ? mapping::portamentoSeconds (patch.portamentoTime) : 0.0;
     const EffectParams& fx = patch.effects;
@@ -114,8 +114,10 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
         Voice& v = voices_[static_cast<std::size_t> (i)];
         const auto set = [] (Envelope& env, const EnvParams& e)
         {
-            env.configure (mapping::envelopeTau (e.attack), mapping::envelopeTau (e.decay),
-                           unit (e.sustain), mapping::envelopeTau (e.release));
+            env.configure (mapping::attackTau (e.attack), mapping::envelopeTau (e.decay),
+                           unit (e.sustain), mapping::envelopeTau (e.release),
+                           mapping::attackHoldSeconds (e.attack), mapping::segmentHoldSeconds (e.decay),
+                           mapping::segmentHoldSeconds (e.release));
         };
         set (v.ampEnv, patch.amp);
         set (v.filterEnv, patch.filter.env);
@@ -163,8 +165,10 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
     }
     const auto set = [] (Envelope& env, const EnvParams& e)
     {
-        env.configure (mapping::envelopeTau (e.attack), mapping::envelopeTau (e.decay),
-                       unit (e.sustain), mapping::envelopeTau (e.release));
+        env.configure (mapping::attackTau (e.attack), mapping::envelopeTau (e.decay),
+                       unit (e.sustain), mapping::envelopeTau (e.release),
+                       mapping::attackHoldSeconds (e.attack), mapping::segmentHoldSeconds (e.decay),
+                       mapping::segmentHoldSeconds (e.release));
         env.trigger();
     };
     set (v.ampEnv, p.amp);
@@ -324,7 +328,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
         v.pitch = v.target > v.pitch ? std::min (v.target, v.pitch + v.glideStep)
                                      : std::max (v.target, v.pitch - v.glideStep);
 
-    const double fade = s.fade > 0.0 ? std::min (1.0, v.age / s.fade) : 1.0;
+    const double fade = mapping::fadeLevel (v.age, s.fade);
     const double lfo = s.lfo1 * fade;
 
     // [measured] Pitch env decay follows the envelope table back to the
@@ -332,7 +336,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
     double pitchEnv = 0.0;
     if (p.pitchEnvDepth != 0)
     {
-        const double attackTau = mapping::envelopeTau (p.pitchAttack);
+        const double attackTau = mapping::attackTau (p.pitchAttack);
         const double rise = attackTau * 1.6014; // ln (1.2525 / 0.2525)
         if (v.age < rise)
             pitchEnv = Envelope::attackTarget * (1.0 - std::exp (-v.age / std::max (attackTau, 1e-9)));
@@ -347,7 +351,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
 
     const double common = v.pitch + v.detune + 12.0 * std::clamp (p.oscShift, -2, 2)
                           + bend_ * (bend_ >= 0.0 ? p.bendUp : p.bendDown)
-                          + mod_ * 2.0 * bipolar (p.lfo2.pitch) * s.lfo2
+                          + mod_ * mapping::pitchLfoSemitones (p.lfo2.pitch) * s.lfo2
                           + (part == 1 ? partDetune_ / 100.0 : 0.0);
     const double pitch1 = common + (p.destination == ModDestination::Osc1And2 ? semis : 0.0);
     const double pitch2 = common + mapping::osc2Semitones (p.osc2) + (toXmod ? 0.0 : semis);
@@ -389,15 +393,15 @@ void Engine::controlVoice (Voice& v, int part) noexcept
                            + mapping::keyFollow (p.filter.keyFollow) * (v.pitch - 60.0) / 12.0
                            + mapping::filterEnvSemitones (p.filter.envDepth) / 12.0 * v.filterEnv.value()
                            + mapping::filterLfoSemitones (p.filter.lfoDepth) / 12.0 * lfo
-                           + mod_ * 4.0 * bipolar (p.lfo2.filter) * s.lfo2
+                           + mod_ * mapping::filterLfoSemitones (p.lfo2.filter) / 12.0 * s.lfo2
                            + velocityDepth;
     v.filter.configure (mapping::cutoffCoefficient (octaves), unit (p.filter.resonance), p.filter.type, p.filter.steep);
 
     double gain = voiceHeadroom * unit (p.level) * unit (p.level)
                   * (1.0 - unit (p.velocityAmp) * (1.0 - v.velocity));
     if (p.pan == PanMode::Off)
-        gain *= 1.0 + 0.9 * bipolar (p.ampLfo) * lfo;
-    gain *= 1.0 + 0.9 * mod_ * bipolar (p.lfo2.amp) * s.lfo2;
+        gain *= 1.0 + mapping::ampLfoDepth (p.ampLfo) * lfo;
+    gain *= 1.0 + mod_ * mapping::ampLfoDepth (p.lfo2.amp) * s.lfo2;
     if (unison (p)) // the stack's phases are unrelated, so it adds in power
         gain *= 1.25 / std::sqrt (static_cast<double> (span (part).count));
     v.gainStep = (gain - v.gain) / kControlInterval;
@@ -427,12 +431,25 @@ void Engine::control() noexcept
             s.lfo2Phase -= 1.0;
         s.lfo2 = osc::triangle (s.lfo2Phase < 0.75 ? s.lfo2Phase + 0.25 : s.lfo2Phase - 0.75);
 
+        // [measured] Pan against the centre: the near side gains 3.2 dB at
+        // ±32 and stays there, the far side falls to 0.50 at ±32 and to
+        // silence at the end (JE-8086, ±32 and ±63/64). Linear between those
+        // points. AUTO swings the full width at 63. OM p.62: FADE does not
+        // apply.
         double pan = 0.0;
         if (s.patch.pan == PanMode::Manual)
             pan = bipolar (s.patch.ampLfo);
         else if (s.patch.pan == PanMode::Auto)
-            pan = bipolar (s.patch.ampLfo) * s.lfo1; // OM p.62: FADE does not apply
-        const double l = std::min (1.0, 1.0 - pan), r = std::min (1.0, 1.0 + pan);
+            pan = mapping::ampLfoDepth (s.patch.ampLfo) / 0.953 * s.lfo1;
+        double l = 1.0, r = 1.0;
+        if (s.patch.pan != PanMode::Off)
+        {
+            const double u = std::min (1.0, std::abs (pan)), k = u < 0.5 ? u / 0.5 : (u - 0.5) / 0.5;
+            const double nearSide = u < 0.5 ? 1.0 + 0.432 * k : 1.432 + 0.015 * k;
+            const double farSide = u < 0.5 ? 1.0 - 0.501 * k : 0.499 * (1.0 - k);
+            l = pan < 0.0 ? nearSide : farSide;
+            r = pan < 0.0 ? farSide : nearSide;
+        }
         s.panStepL = (l - s.panL) / kControlInterval;
         s.panStepR = (r - s.panR) / kControlInterval;
 

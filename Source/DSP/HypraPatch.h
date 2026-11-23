@@ -92,7 +92,7 @@ struct Patch
     int portamentoTime { 11 };
     int oscShift { 0 };
     int bendUp { 2 }, bendDown { 2 };
-    int velocityAmp { 32 }, velocityFilter { 0 };
+    int velocityAmp { 0 }, velocityFilter { 0 }; // [measured] no effect at the JE-8086 defaults
     // JP-8080 only: the JP-8000 has no unison switch.
     bool unison { false };
     int unisonDetune { 12 }; // cents

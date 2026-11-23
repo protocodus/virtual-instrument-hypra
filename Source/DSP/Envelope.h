@@ -12,8 +12,12 @@ class Envelope
 {
 public:
     // Time constants in seconds for each stage.
-    void configure (double attack, double decay, double sustain, double release) noexcept
+    void configure (double attack, double decay, double sustain, double release,
+                    double attackHold = 0.0, double decayHold = 0.0, double releaseHold = 0.0) noexcept
     {
+        attackHold_ = static_cast<int> (attackHold * kEngineRate);
+        decayHold_ = static_cast<int> (decayHold * kEngineRate);
+        releaseHold_ = static_cast<int> (releaseHold * kEngineRate);
         attack_ = coefficient (attack);
         decay_ = coefficient (decay);
         release_ = coefficient (release);
@@ -22,15 +26,31 @@ public:
 
     static constexpr double attackTarget = 1.2525;
 
-    void trigger() noexcept { stage_ = Stage::Attack; }
-    void release() noexcept { if (stage_ != Stage::Idle) stage_ = Stage::Release; }
-    void reset() noexcept { stage_ = Stage::Idle; value_ = 0.0; }
+    void trigger() noexcept
+    {
+        stage_ = Stage::Attack;
+        wait_ = attackHold_;
+    }
+    void release() noexcept
+    {
+        if (stage_ != Stage::Idle)
+        {
+            stage_ = Stage::Release;
+            wait_ = releaseHold_;
+        }
+    }
+    void reset() noexcept { stage_ = Stage::Idle; value_ = 0.0; wait_ = 0; }
 
     bool idle() const noexcept { return stage_ == Stage::Idle; }
     double value() const noexcept { return value_; }
 
     double process() noexcept
     {
+        if (wait_ > 0)
+        {
+            --wait_;
+            return value_;
+        }
         switch (stage_)
         {
             case Stage::Attack:
@@ -39,6 +59,7 @@ public:
                 {
                     value_ = 1.0;
                     stage_ = Stage::Decay;
+                    wait_ = decayHold_;
                 }
                 break;
             case Stage::Decay:
@@ -64,6 +85,7 @@ private:
     }
 
     Stage stage_ { Stage::Idle };
+    int wait_ { 0 }, attackHold_ { 0 }, decayHold_ { 0 }, releaseHold_ { 0 };
     double value_ { 0.0 }, attack_ { 0.0 }, decay_ { 0.0 }, release_ { 0.0 }, sustain_ { 1.0 };
 };
 } // namespace hypra

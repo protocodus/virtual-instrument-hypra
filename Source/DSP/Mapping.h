@@ -206,8 +206,73 @@ inline double lfoHz (int value) noexcept
     return lfoTable[i] * std::pow (lfoTable[i + 1] / lfoTable[i], (a - lo) / (hi - lo));
 }
 
-// [inferred] LFO 1 FADE, not captured yet.
-inline double fadeSeconds (int value) noexcept { return 8.0 * unit (value) * unit (value); }
+// [measured] Every envelope segment starts late: decay and release by
+// 7.5 ms from 10 to 29 and by 25 ms from 30 up (fits every fourth value, and
+// on a C6 for the short ones); attack by 14 ms from 30 up. Below that they
+// start at once. The cause is not known; the level holds meanwhile.
+inline double attackHoldSeconds (int value) noexcept { return value >= 30 ? 0.014 : 0.0; }
+
+// [measured] Below 30 the attack is faster than the table: fitted on a C6
+// (one cycle is 1 ms) every second value, geometric from 8 to 28, measured
+// points below.
+inline double attackTau (int value) noexcept
+{
+    const int v = std::clamp (value, 0, 127);
+    if (v >= 30)
+        return envelopeTau (v);
+    if (v >= 8)
+        return 0.0042113 * std::exp (0.08069 * v);
+    constexpr std::array<double, 5> low { 0.0, 0.0015, 0.0022, 0.0029, 0.00803 };
+    const std::size_t i = static_cast<std::size_t> (v / 2);
+    return v % 2 == 0 ? low[i] : 0.5 * (low[i] + low[i + 1]);
+}
+inline double segmentHoldSeconds (int value) noexcept
+{
+    return value >= 30 ? 0.025 : value >= 10 ? 0.0075 : 0.0;
+}
+
+// [measured] LFO 1 FADE raises the LFO's depth along a straight line in
+// decibels, from 37 dB down to full, in the envelope table's 60 dB time
+// divided by 4.45 (64, 80, 96, 112 within 2 %; 127 runs 12 % long).
+inline double fadeSeconds (int value) noexcept
+{
+    return value <= 0 ? 0.0 : envelopeSeconds60 (value) / 4.45;
+}
+inline double fadeLevel (double age, double seconds) noexcept
+{
+    if (seconds <= 0.0 || age >= seconds)
+        return 1.0;
+    return std::pow (10.0, -37.0 / 20.0 * (1.0 - std::max (age, 0.0) / seconds));
+}
+
+// [measured] LFO 2 RATE: geometric, 0.7815 Hz at 0 and an octave every 25.6
+// steps (every eighth step 0 to 120 within 0.6 %), with the same jump to
+// 50 Hz at 127 as LFO 1.
+inline double lfo2Hz (int value) noexcept
+{
+    const int v = std::clamp (value, 0, 127);
+    return v == 127 ? 50.0 : 0.7815 * std::exp2 (v / 25.61);
+}
+
+// [measured] Amp LFO depth (LFO 1 and LFO 2): the gain swings by this
+// fraction each way, on the pitch-depth curve (29 % at 32, 95 % at 63).
+inline double ampLfoDepth (int value) noexcept
+{
+    return 0.953 * pitchEnvSemitones (value) / pitchEnvTable[16];
+}
+
+// [measured] X-MOD: OSC 2's waveform (unscaled, ±1) moves OSC 1 by this
+// many Hz, the same at C3, C4 and C5 and with OSC 2 a fifth or an octave up
+// (fits of the spectrum at 0, 16 ... 127, 69 Hz a step).
+inline double crossModHz (double depth) noexcept { return 8776.0 * depth; }
+
+// [measured] The noise oscillator's filter is the main filter's -24 dB
+// shape (two identical sections, the same resonance table) with its
+// coefficient on the played note at CUTOFF 64, a semitone a step.
+inline double noiseCoefficient (double hz, double cutoff) noexcept
+{
+    return std::min (1.0, kTwoPi * hz * std::exp2 ((cutoff * 127.0 - 64.0) / 12.0) / kEngineRate);
+}
 
 // [measured] PORTAMENTO TIME on JE-8086: a straight line in pitch that takes
 // the same time for 5, 12 and 24 semitones, up or down. Seconds at 0, 16
@@ -258,10 +323,11 @@ inline double osc2Semitones (const Osc2Params& p) noexcept
     return p.range + fine / 100.0;
 }
 
-// [settled] OM p.58: both oscillators at full volume in the centre.
+// [measured] OSC BALANCE is a constant-power crossfade: -3 dB each in the
+// centre (OM p.58 suggests both at full; the capture does not).
 inline double balanceGain (int value, bool first) noexcept
 {
-    const double b = bipolar (value);
-    return std::min (1.0, first ? 1.0 - b : 1.0 + b);
+    const double angle = kPi / 4.0 * (1.0 + bipolar (value));
+    return first ? std::cos (angle) : std::sin (angle);
 }
 } // namespace hypra::mapping
