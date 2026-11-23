@@ -13,7 +13,11 @@ namespace trancera
 class ToneControl
 {
 public:
-    void reset() noexcept { xB1_ = yB1_ = xT1_ = yT1_ = 0.0; }
+    void reset() noexcept
+    {
+        xB1_ = yB1_ = xT1_ = yT1_ = 0.0;
+        xB1Q_ = yB1Q_ = yBoutPrevQ_ = xT1Q_ = yT1Q_ = 0;
+    }
 
     void configure (int bass, int treble) noexcept
     {
@@ -25,19 +29,36 @@ public:
         aT_ = static_cast<double> (mapping::toneTrebleA[ti]) / 32768.0;
         gCut_ = static_cast<double> (mapping::toneTrebleCut[ti]) / 16384.0;
         gBoost_ = static_cast<double> (mapping::toneTrebleBoost[ti]) / 16384.0;
+
+        negBBSplit_ = splitTable15 (-static_cast<std::int32_t> (mapping::toneBassB[bi]));
+        aBSplit_ = splitTable15 (mapping::toneBassA[bi]);
+        negBTSplit_ = splitTable15 (-static_cast<std::int32_t> (mapping::toneTrebleB[ti]));
+        aTSplit_ = splitTable15 (mapping::toneTrebleA[ti]);
+        gCutSplit_ = splitTable15 (mapping::toneTrebleCut[ti]);
+        gBoostSplit_ = splitTable15 (mapping::toneTrebleBoost[ti]);
     }
 
     // Internal hardware gain staging with rail clipping and -12 dB flat headroom.
+    Q23 processSaturatingQ23 (Q23 x) noexcept
+    {
+        // Treble stage runs on the previous sample's cut-scaled bass output before bass updates its latch.
+        const Q23 yT = sat24 (yBoutPrevQ_ + mulSplit15 (xT1Q_, negBTSplit_.hi, negBTSplit_.lo)
+                                          + mulSplit15 (yT1Q_, aTSplit_.hi, aTSplit_.lo));
+        xT1Q_ = yBoutPrevQ_;
+        yT1Q_ = yT;
+        const Q23 out = sat24 (mulSplit15x2 (yT, gBoostSplit_.hi, gBoostSplit_.lo));
+
+        const Q23 yB = sat24 (x + mulSplit15 (xB1Q_, negBBSplit_.hi, negBBSplit_.lo)
+                                + mulSplit15 (yB1Q_, aBSplit_.hi, aBSplit_.lo));
+        xB1Q_ = x;
+        yB1Q_ = yB;
+        yBoutPrevQ_ = sat24 (mulSplit15x2 (yB, gCutSplit_.hi, gCutSplit_.lo));
+        return out;
+    }
+
     double processSaturating (double x) noexcept
     {
-        const double yB = sat (x - bB_ * xB1_ + aB_ * yB1_);
-        xB1_ = x;
-        yB1_ = yB;
-        const double yBout = gCut_ * yB;
-        const double yT = sat (yBout - bT_ * xT1_ + aT_ * yT1_);
-        xT1_ = yBout;
-        yT1_ = yT;
-        return gBoost_ * yT;
+        return fromQ23 (processSaturatingQ23 (toQ23 (x)));
     }
 
     // Unclipped unity-normalized shelf response for standalone frequency sweeps.
@@ -58,6 +79,11 @@ private:
     double bT_ { 30589.0 / 32768.0 }, aT_ { 30589.0 / 32768.0 };
     double gCut_ { 1.0 }, gBoost_ { 0.25 };
     double xB1_ { 0.0 }, yB1_ { 0.0 }, xT1_ { 0.0 }, yT1_ { 0.0 };
+
+    Coeff15 negBBSplit_ { splitTable15 (-31743) }, aBSplit_ { splitTable15 (31743) };
+    Coeff15 negBTSplit_ { splitTable15 (-30589) }, aTSplit_ { splitTable15 (30589) };
+    Coeff15 gCutSplit_ { splitTable15 (16384) }, gBoostSplit_ { splitTable15 (4096) };
+    Q23 xB1Q_ { 0 }, yB1Q_ { 0 }, yBoutPrevQ_ { 0 }, xT1Q_ { 0 }, yT1Q_ { 0 };
 };
 
 class Delay
@@ -65,69 +91,93 @@ class Delay
 public:
     void prepare()
     {
-        buf_.assign (size, 0.0f);
+        buf_.assign (size, 0u);
         write_ = 0;
         reset();
     }
 
     void reset() noexcept
     {
-        std::fill (buf_.begin(), buf_.end(), 0.0f);
+        std::fill (buf_.begin(), buf_.end(), std::uint16_t { 0 });
         write_ = 0;
-        lp_ = dc_ = 0.0;
+        lp_ = dc_ = 0;
         snap();
     }
 
     void configure (DelayType type, int time, int feedback, int level) noexcept
     {
         type_ = type;
-        d1Target_ = std::clamp (mapping::delaySamples (type, time), 2.0, static_cast<double> (size - 3));
-        fbTarget_ = mapping::delayFeedback (feedback);
-        lvlTarget_ = mapping::effectLevel (level);
+        d1TargetQ16_ = static_cast<std::int64_t> (std::llround (std::clamp (mapping::delaySamples (type, time), 2.0, static_cast<double> (size - 3)) * 65536.0));
+        fbTarget_ = mapping::levelCurveQ23 (feedback);
+        lvlTarget_ = mapping::levelCurveQ23 (level);
+        fbMoving_ = fb_ != fbTarget_;
+        lvlMoving_ = lvl_ != lvlTarget_;
         switch (type)
         {
             case DelayType::PanLR:
             case DelayType::PanRL:
-                lpfK_ = 103.0 / 128.0;
+                lpfK8_ = 103;
                 break;
             case DelayType::PanShort:
             case DelayType::MonoShort:
-                lpfK_ = 107.0 / 128.0;
+                lpfK8_ = 107;
                 break;
             case DelayType::MonoLong:
-                lpfK_ = 96.0 / 128.0;
+                lpfK8_ = 96;
                 break;
         }
+        lpfOneMinusK8_ = 128 - lpfK8_;
     }
 
     void snap() noexcept
     {
-        d1_ = d1Target_;
+        d1Q16_ = d1TargetQ16_;
         fb_ = fbTarget_;
         lvl_ = lvlTarget_;
+        fbSplit_ = splitCoeff15 (fb_);
+        lvlSplit_ = splitCoeff15 (lvl_);
+        fbMoving_ = lvlMoving_ = false;
     }
 
-    Stereo process (double x) noexcept
+    StereoQ23 processQ23 (Q23 x) noexcept
     {
-        d1_ += 0.0002 * (d1Target_ - d1_);
-        if (std::abs (d1Target_ - d1_) < 1.0e-4)
-            d1_ = d1Target_;
-        fb_ += (1.0 / 128.0) * (fbTarget_ - fb_);
-        lvl_ += (1.0 / 256.0) * (lvlTarget_ - lvl_);
+        const std::int64_t dDiff = d1TargetQ16_ - d1Q16_;
+        d1Q16_ = std::abs (dDiff) < 4096 ? d1TargetQ16_ : (d1Q16_ + (dDiff >> 12));
+        if (fbMoving_)
+        {
+            const Q23 nextFb = sat24 (fb_ + ((fbTarget_ - fb_) >> 7));
+            if (nextFb == fb_)
+                fbMoving_ = false;
+            else
+            {
+                fb_ = nextFb;
+                fbSplit_ = splitCoeff15 (fb_);
+            }
+        }
+        if (lvlMoving_)
+        {
+            const Q23 nextLvl = sat24 (lvl_ + ((lvlTarget_ - lvl_) >> 8));
+            if (nextLvl == lvl_)
+                lvlMoving_ = false;
+            else
+            {
+                lvl_ = nextLvl;
+                lvlSplit_ = splitCoeff15 (lvl_);
+            }
+        }
 
-        const double d2 = 0.5 * d1_;
-        const double tap1 = read (d1_);
-        const double tap2 = read (d2);
+        const Q23 tap1 = readQ23 (d1Q16_);
+        const Q23 tap2 = readQ23 (d1Q16_ >> 1);
 
-        const double sIn = sat (0.75 * x + fb_ * tap1);
-        lp_ = sat ((1.0 - lpfK_) * sIn + lpfK_ * lp_);
-        const double hp = sat (0.998046875 * lp_ + dc_);
-        dc_ = sat (dc_ - 0.00390625 * hp);
-        buf_[static_cast<std::size_t> (write_)] = static_cast<float> (hp);
+        const Q23 sIn = sat24 (mul8 (x, 96, 7) + mulSplit15 (tap1, fbSplit_.hi, fbSplit_.lo));
+        lp_ = sat24 (mul8 (sIn, lpfOneMinusK8_, 7) + mul8 (lp_, lpfK8_, 7));
+        const Q23 hp = sat24 (mulImmediate15 (lp_, 127, 96, 7) + dc_);
+        dc_ = sat24 (dc_ + mulImmediate15 (hp, -1, 64, 7));
+        buf_[static_cast<std::size_t> (write_)] = packDelay16 (hp);
         write_ = (write_ + 1) & mask;
 
-        const double w1 = lvl_ * tap1;
-        const double w2 = lvl_ * tap2;
+        const Q23 w1 = mulSplit15 (tap1, lvlSplit_.hi, lvlSplit_.lo);
+        const Q23 w2 = mulSplit15 (tap2, lvlSplit_.hi, lvlSplit_.lo);
         switch (type_)
         {
             case DelayType::PanLR:
@@ -142,33 +192,49 @@ public:
         return { w1, w1 };
     }
 
+    StereoQ23 processMixQ23 (Q23 x) noexcept
+    {
+        const StereoQ23 wet = processQ23 (x);
+        const Q23 dry = mul8 (x, 112, 7);
+        return { sat24 (dry + wet.l), sat24 (dry + wet.r) };
+    }
+
+    Stereo process (double x) noexcept
+    {
+        const StereoQ23 y = processQ23 (toQ23 (x));
+        return { fromQ23 (y.l), fromQ23 (y.r) };
+    }
+
     Stereo processMix (double x) noexcept
     {
-        const Stereo wet = process (x);
-        return { sat (0.875 * x + wet.l), sat (0.875 * x + wet.r) };
+        const StereoQ23 y = processMixQ23 (toQ23 (x));
+        return { fromQ23 (y.l), fromQ23 (y.r) };
     }
 
 private:
-    double read (double delaySamples) const noexcept
+    Q23 readQ23 (std::int64_t delayQ16) const noexcept
     {
         if (buf_.empty())
-            return 0.0;
-        const double position = static_cast<double> (write_) - delaySamples + size;
-        const int index = static_cast<int> (position);
-        const double fraction = position - index;
-        const double a = buf_[static_cast<std::size_t> (index & mask)];
-        const double b = buf_[static_cast<std::size_t> ((index + 1) & mask)];
-        return a + fraction * (b - a);
+            return 0;
+        const std::int32_t whole = static_cast<std::int32_t> (delayQ16 >> 16);
+        const std::int32_t frac = static_cast<std::int32_t> (delayQ16 & 0xFFFF);
+        const std::int32_t idx = (write_ - whole) & mask;
+        const Q23 a = unpackDelay16 (buf_[static_cast<std::size_t> (idx)]);
+        const Q23 b = unpackDelay16 (buf_[static_cast<std::size_t> ((idx - 1) & mask)]);
+        return static_cast<Q23> (a + ((static_cast<std::int64_t> (b - a) * frac) >> 16));
     }
 
     static constexpr int size = 1 << 17, mask = size - 1;
-    std::vector<float> buf_;
+    std::vector<std::uint16_t> buf_;
     int write_ { 0 };
     DelayType type_ { DelayType::PanLR };
-    double d1_ { 17640.0 }, d1Target_ { 17640.0 };
-    double fb_ { 0.0 }, fbTarget_ { 0.0 };
-    double lvl_ { 0.0 }, lvlTarget_ { 0.0 };
-    double lpfK_ { 103.0 / 128.0 }, lp_ { 0.0 }, dc_ { 0.0 };
+    std::int64_t d1Q16_ { 17640LL << 16 }, d1TargetQ16_ { 17640LL << 16 };
+    Q23 fb_ { 0 }, fbTarget_ { 0 };
+    Q23 lvl_ { 0 }, lvlTarget_ { 0 };
+    Coeff15 fbSplit_ {}, lvlSplit_ {};
+    std::int32_t lpfK8_ { 103 }, lpfOneMinusK8_ { 25 };
+    Q23 lp_ { 0 }, dc_ { 0 };
+    bool fbMoving_ { false }, lvlMoving_ { false };
 };
 
 // Unified stereo dual-tap Multi-FX engine across all twelve chorus, flanger, and phaser presets.
@@ -177,10 +243,10 @@ class Chorus
 public:
     void reset() noexcept
     {
-        buf_.fill (0.0f);
+        buf_.fill (0u);
         write_ = 0;
-        phase_ = 0.0;
-        lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0.0;
+        phase_ = 0;
+        lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
         snap();
     }
 
@@ -189,88 +255,140 @@ public:
         if (type != type_)
         {
             type_ = type;
-            phase_ = 0.0;
-            lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0.0;
+            phase_ = 0;
+            lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
         }
-        lvlTarget_ = mapping::effectLevel (level);
+        lvlTarget_ = mapping::levelCurveQ23 (level);
+        lvlMoving_ = lvl_ != lvlTarget_;
     }
 
-    void snap() noexcept { lvl_ = lvlTarget_; }
+    void snap() noexcept
+    {
+        lvl_ = lvlTarget_;
+        lvlSplit_ = splitCoeff15 (lvl_);
+        lvlMoving_ = false;
+    }
+
+    StereoQ23 processMixQ23 (StereoQ23 dry) noexcept
+    {
+        const PresetQ23& p = preset (type_);
+        if (lvlMoving_)
+        {
+            const Q23 nextLvl = sat24 (lvl_ + ((lvlTarget_ - lvl_) >> 7));
+            if (nextLvl == lvl_)
+                lvlMoving_ = false;
+            else
+            {
+                lvl_ = nextLvl;
+                lvlSplit_ = splitCoeff15 (lvl_);
+            }
+        }
+
+        phase_ = wrap24 (phase_ + p.phaseStep);
+        const std::int32_t absP = std::abs (phase_);
+        const std::int32_t invP = kQ23One - absP;
+
+        const std::int32_t dLQ16 = std::max<std::int32_t> (65536, static_cast<std::int32_t> (((static_cast<std::int64_t> (absP) * p.modQ16) >> 23) + p.baseQ16));
+        const std::int32_t dRQ16 = std::max<std::int32_t> (65536, static_cast<std::int32_t> (((static_cast<std::int64_t> (invP) * p.modQ16) >> 23) + p.baseQ16 + p.dRQ16));
+        const Q23 tapLRaw = readQ23 (dLQ16);
+        const Q23 tapRRaw = readQ23 (dRQ16);
+
+        const Q23 m = (dry.l >> 1) + (dry.r >> 1);
+        lpIn_ = sat24 (mulSplit15 (m, p.oneMinusInFlt.hi, p.oneMinusInFlt.lo)
+                       + mulSplit15 (lpIn_, p.inFlt.hi, p.inFlt.lo));
+        const Q23 hpIn = sat24 (m - lpIn_);
+
+        const Q23 fbIn = mulSplit15 (tapRRaw, p.fb.hi, p.fb.lo);
+        fbLp_ = sat24 (mulSplit15 (fbIn, p.oneMinusFbFlt.hi, p.oneMinusFbFlt.lo)
+                       + mulSplit15 (fbLp_, p.fbFlt.hi, p.fbFlt.lo));
+
+        const Q23 toDelay = sat24 (mulImmediate15 (sat24 (hpIn + fbLp_), 127, 96, 7) + dc_);
+        dc_ = sat24 (dc_ + mulImmediate15 (toDelay, -1, 64, 7));
+        buf_[static_cast<std::size_t> (write_)] = packDelay16 (toDelay);
+        write_ = (write_ + 1) & mask;
+
+        const Q23 tapL = mulSplit15 (tapLRaw, lvlSplit_.hi, lvlSplit_.lo);
+        const Q23 tapR = mulSplit15 (tapRRaw, lvlSplit_.hi, lvlSplit_.lo);
+        const Q23 combL = sat24 (tapL + mul8 (tapR, -90, 7));
+        const Q23 combR = sat24 (tapR + mul8 (tapL, -90, 7));
+        wetL_ = sat24 (mulSplit15 (combL, p.oneMinusOutFlt.hi, p.oneMinusOutFlt.lo)
+                       + mulSplit15 (wetL_, p.outFlt.hi, p.outFlt.lo));
+        wetR_ = sat24 (mulSplit15 (combR, p.oneMinusOutFlt.hi, p.oneMinusOutFlt.lo)
+                       + mulSplit15 (wetR_, p.outFlt.hi, p.outFlt.lo));
+
+        return { sat24 (mul8 (dry.l, 116, 7) + mul8 (wetL_, 116, 7)),
+                 sat24 (mul8 (dry.r, 116, 7) + mul8 (wetR_, 116, 7)) };
+    }
 
     Stereo process (double monoDry) noexcept { return processMix ({ monoDry, monoDry }); }
 
     Stereo processMix (Stereo dry) noexcept
     {
-        const Preset& p = presets[static_cast<std::size_t> (type_)];
-        lvl_ += (1.0 / 128.0) * (lvlTarget_ - lvl_);
-
-        phase_ = wrap2 (phase_ + 2.0 * p.rateHz / kEngineRate);
-        const double triL = std::abs (phase_) - 0.5;
-        const double triR = -triL;
-
-        const double dL = std::max (1.0, (triL + 0.5) * p.modSmp + p.baseSmp);
-        const double dR = std::max (1.0, (triR + 0.5) * p.modSmp + p.baseSmp + p.dRSmp);
-        const double tapLRaw = read (dL);
-        const double tapRRaw = read (dR);
-
-        const double m = 0.5 * (dry.l + dry.r);
-        lpIn_ = (1.0 - p.inFlt) * m + p.inFlt * lpIn_;
-        const double hpIn = m - lpIn_;
-
-        const double fbIn = p.fb * tapRRaw;
-        fbLp_ = (1.0 - p.fbFlt) * fbIn + p.fbFlt * fbLp_;
-
-        const double toDelay = sat (0.998046875 * (hpIn + fbLp_) + dc_);
-        dc_ = sat (dc_ - 0.00390625 * toDelay);
-        buf_[static_cast<std::size_t> (write_)] = static_cast<float> (toDelay);
-        write_ = (write_ + 1) & mask;
-
-        const double tapL = lvl_ * tapLRaw;
-        const double tapR = lvl_ * tapRRaw;
-        const double combL = tapL - 0.703125 * tapR;
-        const double combR = tapR - 0.703125 * tapL;
-        wetL_ = (1.0 - p.outFlt) * combL + p.outFlt * wetL_;
-        wetR_ = (1.0 - p.outFlt) * combR + p.outFlt * wetR_;
-
-        return { sat (0.90625 * dry.l + 0.90625 * wetL_), sat (0.90625 * dry.r + 0.90625 * wetR_) };
+        const StereoQ23 y = processMixQ23 ({ toQ23 (dry.l), toQ23 (dry.r) });
+        return { fromQ23 (y.l), fromQ23 (y.r) };
     }
 
 private:
-    struct Preset
+    struct PresetQ23
     {
-        double inFlt, fbFlt, fb, baseSmp, modSmp, dRSmp, rateHz, outFlt;
+        Coeff15 inFlt, oneMinusInFlt;
+        Coeff15 fbFlt, oneMinusFbFlt;
+        Coeff15 fb;
+        Coeff15 outFlt, oneMinusOutFlt;
+        std::int32_t baseQ16, modQ16, dRQ16;
+        Q23 phaseStep;
     };
 
-    static constexpr std::array<Preset, 12> presets { {
-        { 0.99310302734375, 0.0,        0.0,              1152.0, 1536.0,  2.0, 0.063086, 0.5234375        },
-        { 0.99310302734375, 0.0,        0.0,               512.0,  232.0,  2.0, 0.420570, 0.5078125        },
-        { 0.97357177734375, 0.0,        0.0,              1280.0,   44.0,  2.0, 4.037476, 0.62103271484375 },
-        { 0.9375,           0.53125,   -0.328125,         1536.0, 1280.0,  2.0, 0.084114, 0.25             },
-        { 0.96868896484375, 0.515625,   0.78125,           128.0,  100.0,  0.0, 0.315428, 0.25             },
-        { 0.99993896484375, 0.515625,   0.796875,           64.0,  224.0,  0.0, 0.357485, 0.25             },
-        { 0.95306396484375, 0.53125,    0.71875,           128.0,   60.0,  0.0, 1.682281, 0.375            },
-        { 0.99993896484375, 0.5390625, -0.955322265625,      0.0,   20.0,  1.0, 0.084114, 0.25             },
-        { 0.97454833984375, 0.5390625, -0.6875,            224.0, 1280.0,  1.0, 0.084114, 0.25             },
-        { 0.99993896484375, 0.5390625, -0.59375,          1536.0,   40.0,  1.0, 0.168228, 0.25             },
-        { 0.8759765625,     0.54296875,-0.375,            1024.0,   10.0, 80.0, 0.0,      0.5              },
-        { 0.8759765625,     0.54296875,-0.1875,           3072.0,   10.0, 80.0, 0.0,      0.5              },
-    } };
-
-    double read (double delaySamples) const noexcept
+    static constexpr PresetQ23 makePreset (int inFlt14, int fbFlt14, int fb14,
+                                           int baseSmp, int modSmp, int dRSmp,
+                                           Q23 phaseStep, int outFlt14) noexcept
     {
-        const double position = static_cast<double> (write_) - delaySamples + size;
-        const int index = static_cast<int> (position);
-        const double fraction = position - index;
-        const double a = buf_[static_cast<std::size_t> (index & mask)];
-        const double b = buf_[static_cast<std::size_t> ((index + 1) & mask)];
-        return a + fraction * (b - a);
+        return {
+            splitCoeff15 (inFlt14 * 512), splitCoeff15 ((16384 - inFlt14) * 512),
+            splitCoeff15 (fbFlt14 * 512), splitCoeff15 ((16384 - fbFlt14) * 512),
+            splitCoeff15 (fb14 * 512),
+            splitCoeff15 (outFlt14 * 512), splitCoeff15 ((16384 - outFlt14) * 512),
+            baseSmp << 16, modSmp << 16, dRSmp << 16,
+            phaseStep
+        };
+    }
+
+    static const PresetQ23& preset (ChorusType type) noexcept
+    {
+        static constexpr std::array<PresetQ23, 12> table { {
+            makePreset (16271,    0,      0, 1152, 1536,  2,  12,  8576),
+            makePreset (16271,    0,      0,  512,  232,  2,  80,  8320),
+            makePreset (15951,    0,      0, 1280,   44,  2, 768, 10175),
+            makePreset (15360, 8704,  -5376, 1536, 1280,  2,  16,  4096),
+            makePreset (15871, 8448,  12800,  128,  100,  0,  60,  4096),
+            makePreset (16383, 8448,  13056,   64,  224,  0,  68,  4096),
+            makePreset (15615, 8704,  11776,  128,   60,  0, 320,  6144),
+            makePreset (16383, 8832, -15652,    0,   20,  1,  16,  4096),
+            makePreset (15967, 8832, -11264,  224, 1280,  1,  16,  4096),
+            makePreset (16383, 8832,  -9728, 1536,   40,  1,  32,  4096),
+            makePreset (14352, 8896,  -6144, 1024,   10, 80,   0,  8192),
+            makePreset (14352, 8896,  -3072, 3072,   10, 80,   0,  8192),
+        } };
+        return table[static_cast<std::size_t> (type)];
+    }
+
+    Q23 readQ23 (std::int32_t delayQ16) const noexcept
+    {
+        const std::int32_t whole = delayQ16 >> 16;
+        const std::int32_t frac = delayQ16 & 0xFFFF;
+        const std::int32_t idx = (write_ - whole) & mask;
+        const Q23 a = unpackDelay16 (buf_[static_cast<std::size_t> (idx)]);
+        const Q23 b = unpackDelay16 (buf_[static_cast<std::size_t> ((idx - 1) & mask)]);
+        return static_cast<Q23> (a + ((static_cast<std::int64_t> (b - a) * frac) >> 16));
     }
 
     static constexpr int size = 8192, mask = size - 1;
-    std::array<float, size> buf_ {};
+    std::array<std::uint16_t, size> buf_ {};
     int write_ { 0 };
     ChorusType type_ { ChorusType::SuperSlow };
-    double lvl_ { 0.0 }, lvlTarget_ { 0.0 }, phase_ { 0.0 };
-    double lpIn_ { 0.0 }, fbLp_ { 0.0 }, dc_ { 0.0 }, wetL_ { 0.0 }, wetR_ { 0.0 };
+    Q23 lvl_ { 0 }, lvlTarget_ { 0 }, phase_ { 0 };
+    Coeff15 lvlSplit_ {};
+    Q23 lpIn_ { 0 }, fbLp_ { 0 }, dc_ { 0 }, wetL_ { 0 }, wetR_ { 0 };
+    bool lvlMoving_ { false };
 };
 } // namespace trancera

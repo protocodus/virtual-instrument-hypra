@@ -61,21 +61,8 @@ public:
     void setColor (const AnalogColor& color) noexcept
     {
         color_ = color;
-        // R-2R error per upper-8-bit segment: a fixed pseudo-random pattern,
-        // its mean removed and the segment holding code 0 exact, so silence
-        // stays exactly silent and there is no gain shift.
-        std::uint32_t state = 0x8086u;
-        double mean = 0.0;
-        for (double& e : ladder_)
-        {
-            state ^= state << 13; state ^= state >> 17; state ^= state << 5;
-            e = (static_cast<double> (state & 0xffffu) / 32767.5 - 1.0);
-            mean += e;
-        }
-        mean /= static_cast<double> (ladder_.size());
-        for (double& e : ladder_)
-            e = (e - mean) * color.dacDnlLsb / 131072.0;
-        ladder_[128] = 0.0;
+        buildLadder (ladderL_, 0x54524E43u, color.dacDnlLsb);
+        buildLadder (ladderR_, 0x54524E44u, color.dacDnlLsb);
     }
     const AnalogColor& color() const noexcept { return color_; }
 
@@ -103,13 +90,11 @@ public:
 
     void reset() noexcept
     {
-        over_.reset();
+        down_.reset();
         buffer_.reset();
         jack_.reset();
         panel_.reset();
         z_.fill ({});
-        held_.fill ({});
-        heldAt_ = 0;
         couplingX_.fill ({});
         couplingY_.fill ({});
     }
@@ -117,17 +102,12 @@ public:
     // One 88.2 kHz DAC word in, the jack voltage out at 88.2 kHz.
     Stereo process (Stereo word) noexcept
     {
-        Stereo x { convert (word.l), convert (word.r) };
-        if (node_ == OutputNode::Digital)
-            return x;
-        for (std::size_t i = 0; i < couplingX_.size(); ++i)
-        {
-            const Stereo y = couplingGain_ * (x - couplingX_[i]) + couplingPole_ * couplingY_[i];
-            couplingX_[i] = x;
-            couplingY_[i] = y;
-            x = y;
-        }
-        return over_.process (x, [this] (Stereo v) { return analogue (v); });
+        return finishAnalog ({ convert (word.l, ladderL_), convert (word.r, ladderR_) });
+    }
+
+    Stereo processQ23 (StereoQ23 word) noexcept
+    {
+        return finishAnalog ({ convertQ23 (word.l, ladderL_), convertQ23 (word.r, ladderR_) });
     }
 
     // Continuous-time response, without the DAC's sample-and-hold droop.
@@ -190,7 +170,61 @@ private:
         Stereo z_;
     };
 
-    double convert (double x) const noexcept
+    Stereo finishAnalog (Stereo x) noexcept
+    {
+        if (node_ == OutputNode::Digital)
+            return x;
+        for (std::size_t i = 0; i < couplingX_.size(); ++i)
+        {
+            const Stereo y = couplingGain_ * (x - couplingX_[i]) + couplingPole_ * couplingY_[i];
+            couplingX_[i] = x;
+            couplingY_[i] = y;
+            x = y;
+        }
+        return down_.processZeroOrderHold (x, [this] (Stereo v) { return analogue (v); });
+    }
+
+    static void buildLadder (std::array<double, 256>& table, std::uint32_t seed, double dnlLsb) noexcept
+    {
+        if (dnlLsb <= 0.0)
+        {
+            table.fill (0.0);
+            return;
+        }
+        // Binary-weighted upper-8-bit R-2R mismatch profile with zero mean and exact code zero.
+        std::array<double, 8> w {};
+        std::uint32_t state = seed ? seed : 1u;
+        for (std::size_t b = 0; b < 8; ++b)
+        {
+            state ^= state << 13; state ^= state >> 17; state ^= state << 5;
+            const double u = static_cast<double> (state & 0xffffu) / 32767.5 - 1.0;
+            w[b] = u / std::sqrt (static_cast<double> (1u << (7u - b)));
+        }
+        for (std::size_t s = 0; s < table.size(); ++s)
+        {
+            double sum = 0.0;
+            for (std::size_t b = 0; b < 8; ++b)
+                sum += ((s >> b) & 1u) != 0u ? w[b] : -w[b];
+            table[s] = sum;
+        }
+        const double zeroShift = table[128] / 255.0;
+        double peak = 0.0;
+        for (std::size_t s = 0; s < table.size(); ++s)
+        {
+            table[s] = (s == 128) ? 0.0 : (table[s] + zeroShift);
+            peak = std::max (peak, std::abs (table[s]));
+        }
+        if (peak <= 0.0)
+        {
+            table.fill (0.0);
+            return;
+        }
+        const double scale = (dnlLsb / 131072.0) / peak;
+        for (double& e : table)
+            e *= scale;
+    }
+
+    double convert (double x, const std::array<double, 256>& ladder) const noexcept
     {
         if (! color_.on || node_ == OutputNode::Digital)
             return std::clamp (std::nearbyint (x * 131072.0), -131072.0, 131071.0) / 131072.0;
@@ -205,18 +239,28 @@ private:
             return 0.0;
         const double code = std::clamp (std::floor (scaled), -131072.0, 131071.0);
         const auto segment = static_cast<std::size_t> ((static_cast<std::int32_t> (code) + 131072) >> 10);
-        return code / 131072.0 + ladder_[segment];
+        return code / 131072.0 + ladder[segment];
+    }
+
+    double convertQ23 (Q23 w, const std::array<double, 256>& ladder) const noexcept
+    {
+        if (! color_.on || node_ == OutputNode::Digital)
+        {
+            const std::int32_t rounded = w >= 0 ? (w + 32) / 64 : -((-w + 32) / 64);
+            return static_cast<double> (std::clamp (rounded, -131072, 131071)) * (1.0 / 131072.0);
+        }
+        // Frame the 24-bit signed word to 18 bits via arithmetic truncation.
+        if (w > -64 && w < 64)
+            return 0.0;
+        const std::int32_t code = std::clamp (w >> 6, -131072, 131071);
+        const auto segment = static_cast<std::size_t> ((code + 131072) >> 10);
+        return static_cast<double> (code) * (1.0 / 131072.0) + ladder[segment];
     }
 
     Stereo analogue (Stereo v) noexcept
     {
-        // The DAC holds each word for eight of these samples.
-        held_[heldAt_] = v;
-        heldAt_ = (heldAt_ + 1) % held_.size();
-        Stereo hold;
-        for (const Stereo& h : held_)
-            hold += h;
-        Stereo x = jack_.process (buffer_.process (0.125 * hold));
+        // Driven directly by the DAC zero-order-hold staircase at 8 x 88.2 kHz.
+        Stereo x = jack_.process (buffer_.process (v));
         if (node_ == OutputNode::KeyboardAsPrinted)
             x = panel_.process (x);
         const Stereo y = b_[0] * x + z_[0];
@@ -240,17 +284,15 @@ private:
         return std::copysign (knee + span * softClip ((a - knee) / span), u);
     }
 
-    oversampling::Oversampling8<Stereo> over_;
+    oversampling::Downsampler8<Stereo> down_;
     FirstOrder buffer_, jack_, panel_;
     OutputNode node_ { OutputNode::Rack };
     std::array<double, 3> a_ {};
     std::array<double, 4> b_ { 1.0, 0.0, 0.0, 0.0 };
     std::array<Stereo, 3> z_ {};
-    std::array<Stereo, 8> held_ {};
-    std::size_t heldAt_ { 0 };
     std::array<Stereo, 4> couplingX_ {}, couplingY_ {};
     double normalise_ { 1.0 }, couplingPole_ { 1.0 }, couplingGain_ { 1.0 };
     AnalogColor color_;
-    std::array<double, 256> ladder_ {};
+    std::array<double, 256> ladderL_ {}, ladderR_ {};
 };
 } // namespace trancera

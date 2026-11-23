@@ -57,31 +57,16 @@ inline constexpr std::array<double, 4> innerTaps {
     -0.067673764721470173, 0.30318643489593938
 };
 
-// Each history is stored twice, at slot and slot + size, so every tap reads
-// one contiguous window behind the write head instead of a masked index.
-// The sums keep their order, so the output is bit-identical.
+// Downsample-only half-band decimation stage sharing the same folded FIR taps.
 template <std::size_t Pairs, const std::array<double, Pairs>& Taps, class V>
-class HalfBand
+class HalfBandDown
 {
 public:
     void reset() noexcept
     {
-        up_.fill (V {});
         even_.fill (V {});
         odd_.fill (V {});
-        upWrite_ = downWrite_ = 0;
-    }
-
-    std::array<V, 2> upsample (V x) noexcept
-    {
-        up_[upWrite_] = up_[upWrite_ + size] = x;
-        const V* head = &up_[upWrite_ + size];
-        const V even = head[-static_cast<std::ptrdiff_t> (Pairs)];
-        V odd {};
-        for (std::size_t i = 0; i < Pairs; ++i)
-            odd += Taps[i] * (*(head - i) + *(head - (2 * Pairs - 1 - i)));
-        upWrite_ = (upWrite_ + 1) & mask;
-        return { even, 2.0 * odd };
+        downWrite_ = 0;
     }
 
     V downsample (V even, V odd) noexcept
@@ -98,15 +83,89 @@ public:
     }
 
 private:
-    // The downsampler needs a sample 2*Pairs places behind its write head.
-    // Keep more than that many slots so writing cannot replace that sample.
     static constexpr std::size_t size = 2 * Pairs + 1 <= 16 ? 16
                                        : 2 * Pairs + 1 <= 32 ? 32
                                        : 2 * Pairs + 1 <= 64 ? 64 : 128;
     static constexpr std::size_t mask = size - 1;
     static_assert (2 * Pairs < size);
-    std::array<V, 2 * size> up_ {}, even_ {}, odd_ {};
-    std::size_t upWrite_ { 0 }, downWrite_ { 0 };
+    std::array<V, 2 * size> even_ {}, odd_ {};
+    std::size_t downWrite_ { 0 };
+};
+
+// Each history is stored twice, at slot and slot + size, so every tap reads
+// one contiguous window behind the write head instead of a masked index.
+// The sums keep their order, so the output is bit-identical.
+template <std::size_t Pairs, const std::array<double, Pairs>& Taps, class V>
+class HalfBand
+{
+public:
+    void reset() noexcept
+    {
+        up_.fill (V {});
+        upWrite_ = 0;
+        down_.reset();
+    }
+
+    std::array<V, 2> upsample (V x) noexcept
+    {
+        up_[upWrite_] = up_[upWrite_ + size] = x;
+        const V* head = &up_[upWrite_ + size];
+        const V even = head[-static_cast<std::ptrdiff_t> (Pairs)];
+        V odd {};
+        for (std::size_t i = 0; i < Pairs; ++i)
+            odd += Taps[i] * (*(head - i) + *(head - (2 * Pairs - 1 - i)));
+        upWrite_ = (upWrite_ + 1) & mask;
+        return { even, 2.0 * odd };
+    }
+
+    V downsample (V even, V odd) noexcept
+    {
+        return down_.downsample (even, odd);
+    }
+
+private:
+    static constexpr std::size_t size = 2 * Pairs + 1 <= 16 ? 16
+                                       : 2 * Pairs + 1 <= 32 ? 32
+                                       : 2 * Pairs + 1 <= 64 ? 64 : 128;
+    static constexpr std::size_t mask = size - 1;
+    static_assert (2 * Pairs < size);
+    std::array<V, 2 * size> up_ {};
+    std::size_t upWrite_ { 0 };
+    HalfBandDown<Pairs, Taps, V> down_;
+};
+
+// 8x zero-order-hold staircase feed into 3-stage half-band decimation (half the
+// FIR work and half the latency of a full up/down round trip).
+template <class V>
+class Downsampler8
+{
+public:
+    static constexpr int latencySamples = 37;
+
+    void reset() noexcept { outer_.reset(); middle_.reset(); inner_.reset(); }
+
+    template <class Circuit>
+    V processZeroOrderHold (V heldWord, Circuit&& circuit) noexcept
+    {
+        std::array<V, 2> outerResults {};
+        for (std::size_t i = 0; i < 2; ++i)
+        {
+            std::array<V, 2> middleResults {};
+            for (std::size_t j = 0; j < 2; ++j)
+            {
+                const V first = circuit (heldWord);
+                const V second = circuit (heldWord);
+                middleResults[j] = inner_.downsample (first, second);
+            }
+            outerResults[i] = middle_.downsample (middleResults[0], middleResults[1]);
+        }
+        return outer_.downsample (outerResults[0], outerResults[1]);
+    }
+
+private:
+    HalfBandDown<32, outerTaps, V> outer_;
+    HalfBandDown<8, middleTaps, V> middle_;
+    HalfBandDown<4, innerTaps, V> inner_;
 };
 
 template <class V>

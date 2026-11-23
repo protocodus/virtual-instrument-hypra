@@ -63,7 +63,9 @@ private:
         int portaRemain { 0 };
         int fadePhase { 16384 };
         int qSnapTicks { 0 };
-        double ampBase { 0.0 }, ampSmoothed { 0.0 };
+        Q23 ampBaseQ23 { 0 }, ampTargetQ23 { 0 }, ampSmoothedQ23 { 0 };
+        Coeff15 ampAlpha {}, ampSplit {};
+        bool ampMoving { false };
         Patch patch; // the part's patch at this voice's velocity (withVelocity)
     };
 
@@ -71,6 +73,8 @@ private:
 
     struct PartState
     {
+        static constexpr Q23 kPanCenterQ23 = 22784 << 8;
+
         Patch patch;
         ToneControl tone;
         Delay delay;
@@ -78,11 +82,14 @@ private:
         Random lfoRandom;
         std::array<HeldNote, 128> keys {};
         int keyCount { 0 };
-        double lfoPhase { 0.0 }, lfoHeld { 0.0 }, lfo1 { 0.0 }, lfo2Phase { 0.0 }, lfo2 { 0.0 };
-        double lfoStep { 0.0 }, lfo2Step { 0.0 };
+        std::uint16_t lfo1Phase { 0 }, lfo2Phase { 0 };
+        std::uint16_t lfo1Step { 0 }, lfo2Step { 0 };
+        int effAmpLfo { 0 };
+        double lfoHeld { 0.0 }, lfo1 { 0.0 }, lfo2 { 0.0 };
         double lastPitch { 60.0 };
-        double panL { mapping::panCenterGain }, panR { mapping::panCenterGain };
-        double panTargetL { mapping::panCenterGain }, panTargetR { mapping::panCenterGain };
+        Q23 panLQ23 { kPanCenterQ23 }, panRQ23 { kPanCenterQ23 };
+        Q23 panTargetLQ23 { kPanCenterQ23 }, panTargetRQ23 { kPanCenterQ23 };
+        Coeff15 panLSplit { splitCoeff15 (kPanCenterQ23) }, panRSplit { splitCoeff15 (kPanCenterQ23) };
         bool hasPlayed { false }, lfoEdge { false };
     };
 

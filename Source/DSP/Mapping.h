@@ -268,6 +268,16 @@ inline constexpr std::array<std::int16_t, 128> filterLfoDepth {
       1810,   1918,   2029,   2143,   2259,   2377,   2497,   2620,   2744,   2871,   2999,   3130,   3262,   3396,   3532,   3669,
       3807,   3947,   4089,   4231,   4374,   4519,   4664,   4811,   4958,   5105,   5253,   5402,   5551,   5700,   5850,   6000
 };
+inline constexpr std::array<std::int16_t, 128> velocityMatrixTable {
+    -128, -128, -127, -125, -124, -122, -120, -119, -117, -116, -114, -112, -111, -109, -107, -106,
+    -104, -103, -101,  -99,  -98,  -96,  -94,  -93,  -91,  -90,  -88,  -86,  -85,  -83,  -82,  -80,
+     -78,  -77,  -75,  -73,  -72,  -70,  -69,  -67,  -65,  -64,  -62,  -60,  -59,  -57,  -56,  -54,
+     -52,  -51,  -49,  -47,  -46,  -44,  -43,  -41,  -39,  -38,  -36,  -35,  -33,  -31,  -30,  -28,
+     -26,  -25,  -23,  -22,  -20,  -18,  -17,  -15,  -13,  -12,  -10,   -9,   -7,   -5,   -4,   -2,
+       0,    2,    5,    8,   10,   13,   16,   19,   21,   24,   27,   29,   32,   35,   38,   40,
+      43,   46,   49,   51,   54,   57,   59,   62,   65,   68,   70,   73,   76,   78,   81,   84,
+      87,   89,   92,   95,   98,  100,  103,  106,  108,  111,  114,  117,  119,  122,  125,  128
+};
 inline constexpr std::array<std::uint16_t, 128> velocityCurve {
          0,    179,    360,    541,    723,    906,   1091,   1276,   1462,   1650,   1838,   2027,   2218,   2409,   2602,   2795,
       2990,   3186,   3383,   3580,   3779,   3979,   4180,   4383,   4586,   4790,   4996,   5203,   5410,   5619,   5829,   6041,
@@ -277,6 +287,16 @@ inline constexpr std::array<std::uint16_t, 128> velocityCurve {
      17939,  18217,  18496,  18776,  19058,  19342,  19627,  19914,  20202,  20492,  20784,  21077,  21371,  21668,  21966,  22265,
      22566,  22869,  23174,  23480,  23788,  24097,  24408,  24721,  25036,  25352,  25670,  25990,  26312,  26635,  26960,  27287,
      27616,  27946,  28278,  28612,  28948,  29286,  29626,  29967,  30311,  30656,  31003,  31352,  31703,  32056,  32410,  32767
+};
+inline constexpr std::array<std::uint16_t, 128> levelCurveTable {
+         0,      2,      8,     18,     32,     50,     73,     99,    130,    164,    203,    245,    292,    343,    398,    457,
+       520,    587,    658,    733,    812,    895,    983,   1074,   1170,   1269,   1373,   1481,   1592,   1708,   1828,   1952,
+      2080,   2212,   2348,   2488,   2632,   2781,   2933,   3089,   3250,   3415,   3583,   3756,   3933,   4113,   4298,   4487,
+      4680,   4877,   5078,   5284,   5493,   5706,   5924,   6145,   6370,   6600,   6834,   7071,   7313,   7559,   7809,   8063,
+      8321,   8583,   8849,   9119,   9393,   9672,   9954,  10241,  10531,  10826,  11124,  11427,  11734,  12045,  12359,  12678,
+     13001,  13329,  13660,  13995,  14334,  14678,  15025,  15376,  15732,  16091,  16455,  16823,  17195,  17570,  17950,  18334,
+     18722,  19114,  19511,  19911,  20315,  20723,  21136,  21552,  21973,  22397,  22826,  23259,  23696,  24136,  24581,  25030,
+     25483,  25940,  26402,  26867,  27336,  27809,  28287,  28768,  29254,  29744,  30237,  30735,  31237,  31743,  32253,  32768
 };
 
 // Detune spacing multipliers for the seven supersaw oscillators relative to the centre saw.
@@ -457,6 +477,12 @@ inline double envSmootherAlpha (int speed) noexcept
     return static_cast<double> (envSmootherTable[idx]) / 16384.0;
 }
 
+inline Q23 envSmootherAlphaQ23 (int speed) noexcept
+{
+    const auto idx = static_cast<std::size_t> (std::clamp (speed, 0, 11));
+    return static_cast<Q23> (envSmootherTable[idx]) << 9;
+}
+
 inline double envelopeStep100Hz (int value) noexcept
 {
     const auto idx = static_cast<std::size_t> (std::clamp (value, 0, 127));
@@ -527,6 +553,24 @@ inline double lfo2Hz (int value) noexcept
     return static_cast<double> (lfo2RateTable[idx]) * (50.0 / 32768.0);
 }
 
+inline Q23 levelCurveQ23 (int value) noexcept
+{
+    const auto idx = static_cast<std::size_t> (std::clamp (value, 0, 127));
+    return sat24 (static_cast<std::int32_t> (levelCurveTable[idx]) << 8);
+}
+
+inline double levelCurve (int value) noexcept
+{
+    const auto idx = static_cast<std::size_t> (std::clamp (value, 0, 127));
+    return static_cast<double> (levelCurveTable[idx]) / 32768.0;
+}
+
+inline double velocityCurveUnit (int velocity) noexcept
+{
+    const auto idx = static_cast<std::size_t> (std::clamp (velocity, 0, 127));
+    return static_cast<double> (velocityCurve[idx]) / 32767.0;
+}
+
 inline double effectLevel (int value) noexcept
 {
     const double u = unit (value);
@@ -535,8 +579,7 @@ inline double effectLevel (int value) noexcept
 
 inline double ampSustain (int value) noexcept
 {
-    const double u = unit (value);
-    return u * u;
+    return levelCurve (value);
 }
 
 inline double filterSustain (int value) noexcept
@@ -544,14 +587,17 @@ inline double filterSustain (int value) noexcept
     return unit (value);
 }
 
-// The velocity matrix's scale for a key: 2 x velocityCurve[v] - 1, from -1 to +1.
-// [measured] JE-8086 black box, 2026-11-23: a held saw with the AMP LEVEL depth
-// at -64, 64 and 127 moved AMP LEVEL by depth x -0.617, -0.20, +0.416, +1.0 at
-// velocity 32, 64, 100, 127; this table gives -0.618, -0.164, +0.452, +1.0.
-inline double velocityMatrixScale (int velocity) noexcept
+// Signed velocity-matrix factor [-128..+128] with neutral pivot at velocity 80.
+inline int velocityMatrixFactor (int velocity) noexcept
 {
     const auto idx = static_cast<std::size_t> (std::clamp (velocity, 0, 127));
-    return 2.0 * static_cast<double> (velocityCurve[idx]) / 32767.0 - 1.0;
+    return velocityMatrixTable[idx];
+}
+
+// Normalised velocity-matrix scale factor in [-1.0, +1.0].
+inline double velocityMatrixScale (int velocity) noexcept
+{
+    return static_cast<double> (velocityMatrixFactor (velocity)) / 128.0;
 }
 
 inline double noiseCoefficient (double hz, double cutoff) noexcept

@@ -19,7 +19,7 @@ public:
         attackRate_ = mapping::envRateTable[static_cast<std::size_t> (attackVal_)];
         decayRate_ = mapping::envRateTable[static_cast<std::size_t> (decayVal_)];
         releaseRate_ = mapping::envRateTable[static_cast<std::size_t> (releaseVal_)];
-        sustain_ = std::clamp (sustain, 0.0, 1.0);
+        sustain_ = static_cast<std::int32_t> (std::llround (std::clamp (sustain, 0.0, 1.0) * static_cast<double> (kOne)));
     }
 
     void trigger (bool lfoActive = false, bool lfoEdge = false, bool useEnvSpeed = true) noexcept
@@ -39,18 +39,20 @@ public:
     void reset() noexcept
     {
         stage_ = Stage::Idle;
-        value_ = 0.0;
+        value_ = 0;
         tickCount_ = kEnvelopeInterval;
         nextSpeed_ = 11;
-        smootherAlpha_ = mapping::envSmootherAlpha (11);
+        smootherAlphaQ23_ = mapping::envSmootherAlphaQ23 (11);
     }
 
     bool idle() const noexcept { return stage_ == Stage::Idle; }
-    double value() const noexcept { return value_; }
+    double value() const noexcept { return static_cast<double> (value_) * (1.0 / static_cast<double> (kOne)); }
+    std::int32_t valueQ14() const noexcept { return value_ >> 10; }
 
     // 88.2 kHz one-pole coefficient matching the active segment and modulation speed.
-    double smootherAlpha() const noexcept { return smootherAlpha_; }
-    double filterSmootherAlpha() const noexcept { return smootherAlpha_; }
+    double smootherAlpha() const noexcept { return fromQ23 (smootherAlphaQ23_); }
+    double filterSmootherAlpha() const noexcept { return smootherAlpha(); }
+    Q23 smootherAlphaQ23() const noexcept { return smootherAlphaQ23_; }
 
     double process() noexcept
     {
@@ -59,12 +61,11 @@ public:
             tickCount_ = kEnvelopeInterval;
             tick100Hz();
         }
-        return value_;
+        return value();
     }
 
     void tick100Hz (bool lfoActive = false, bool lfoEdge = false, bool useEnvSpeed = true) noexcept
     {
-        constexpr double kMinStep = 1.0 / 16384.0;
         int speed = nextSpeed_;
         if (lfoActive)
         {
@@ -80,22 +81,27 @@ public:
         }
 
         int envSpeed = speed;
+        const auto expStep = [] (std::int32_t diff, std::uint16_t rate) noexcept -> std::int32_t
+        {
+            const std::int32_t delta = static_cast<std::int32_t> ((static_cast<std::int64_t> (diff) * rate) >> 13);
+            return std::max<std::int32_t> (kMinStep, delta);
+        };
+
         switch (stage_)
         {
             case Stage::Attack:
                 if (attackRate_ > 4864)
                 {
-                    value_ = 1.0;
+                    value_ = kOne;
                     stage_ = Stage::Decay;
                     envSpeed = fastSpeedForRate (attackRate_);
                 }
                 else
                 {
-                    const double step = std::max (kMinStep, (attackTarget - value_) * (static_cast<double> (attackRate_) / 8192.0));
-                    value_ += step;
-                    if (value_ >= 1.0)
+                    value_ += expStep (kAttackTarget - value_, attackRate_);
+                    if (value_ >= kOne)
                     {
-                        value_ = 1.0;
+                        value_ = kOne;
                         stage_ = Stage::Decay;
                     }
                     if (attackRate_ > 1536)
@@ -114,8 +120,7 @@ public:
                     }
                     else
                     {
-                        const double step = std::max (kMinStep, (value_ - sustain_) * (static_cast<double> (decayRate_) / 8192.0));
-                        value_ = std::max (sustain_, value_ - step);
+                        value_ = std::max (sustain_, value_ - expStep (value_ - sustain_, decayRate_));
                         if (value_ <= sustain_)
                         {
                             value_ = sustain_;
@@ -135,8 +140,7 @@ public:
                     }
                     else
                     {
-                        const double step = std::max (kMinStep, (sustain_ - value_) * (static_cast<double> (decayRate_) / 8192.0));
-                        value_ = std::min (sustain_, value_ + step);
+                        value_ = std::min (sustain_, value_ + expStep (sustain_ - value_, decayRate_));
                         if (value_ >= sustain_)
                         {
                             value_ = sustain_;
@@ -159,16 +163,16 @@ public:
             case Stage::Release:
                 if (releaseRate_ > 4864)
                 {
-                    value_ = 0.0;
+                    value_ = 0;
                     stage_ = Stage::Idle;
                     envSpeed = fastSpeedForRate (releaseRate_);
                 }
                 else
                 {
-                    const double step = std::max (kMinStep, value_ * (static_cast<double> (releaseRate_) / 8192.0));
+                    const std::int32_t step = expStep (value_, releaseRate_);
                     if (value_ <= step)
                     {
-                        value_ = 0.0;
+                        value_ = 0;
                         stage_ = Stage::Idle;
                     }
                     else
@@ -181,7 +185,7 @@ public:
                 break;
 
             case Stage::Idle:
-                value_ = 0.0;
+                value_ = 0;
                 break;
         }
 
@@ -190,14 +194,14 @@ public:
 
         if (speed == 10)
         {
-            smootherAlpha_ = mapping::envSmootherAlpha (10);
+            smootherAlphaQ23_ = mapping::envSmootherAlphaQ23 (10);
             nextSpeed_ = 11;
         }
         else if (stage_ == Stage::Attack)
         {
             if (speed < 12)
             {
-                smootherAlpha_ = mapping::envSmootherAlpha (speed);
+                smootherAlphaQ23_ = mapping::envSmootherAlphaQ23 (speed);
                 nextSpeed_ = (speed == 0 || speed == 11) ? 11 : 13;
             }
             else
@@ -208,12 +212,16 @@ public:
         else
         {
             if (speed < 12)
-                smootherAlpha_ = mapping::envSmootherAlpha (speed);
+                smootherAlphaQ23_ = mapping::envSmootherAlphaQ23 (speed);
             nextSpeed_ = 11;
         }
     }
 
 private:
+    static constexpr std::int32_t kOne = 1 << 24;
+    static constexpr std::int32_t kAttackTarget = 20971520; // 1.25 * kOne
+    static constexpr std::int32_t kMinStep = 1 << 10;
+
     static constexpr int fastSpeedForRate (std::uint16_t rate) noexcept
     {
         if (rate >= 8192) return 0;
@@ -235,7 +243,7 @@ private:
     std::uint16_t attackRate_ { 8192 }, decayRate_ { 256 }, releaseRate_ { 6174 };
     int tickCount_ { kEnvelopeInterval };
     int nextSpeed_ { 11 };
-    double value_ { 0.0 }, sustain_ { 1.0 };
-    double smootherAlpha_ { mapping::envSmootherAlpha (11) };
+    std::int32_t value_ { 0 }, sustain_ { kOne };
+    Q23 smootherAlphaQ23_ { mapping::envSmootherAlphaQ23 (11) };
 };
 } // namespace trancera

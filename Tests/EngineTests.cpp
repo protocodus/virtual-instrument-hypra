@@ -1100,12 +1100,318 @@ void analogColor()
     check (std::all_of (l.begin(), l.end(), [] (float v) { return v == 0.0f; }), "the engine is silent before a note with the colour on");
 }
 
+void fixedPointAndMatrix()
+{
+    check (packDelay16 (0) == 0u && unpackDelay16 (0u) == 0, "companded delay word preserves zero");
+    const std::array<Q23, 11> boundaries {
+        kQ23Min, -(1 << 21), -(1 << 19), -(1 << 17), -(1 << 14), 0,
+        1 << 14, 1 << 17, 1 << 19, 1 << 21, kQ23Max
+    };
+    bool mono = true;
+    for (std::size_t i = 1; i < boundaries.size(); ++i)
+        mono = mono && unpackDelay16 (packDelay16 (boundaries[i - 1])) <= unpackDelay16 (packDelay16 (boundaries[i]));
+    check (mono, "companded delay word is monotonic across exponent boundaries");
+
+    double worstRelErr = 0.0;
+    for (std::int32_t s = 1 << 16; s <= kQ23Max; s += 1 << 15)
+    {
+        const Q23 u = unpackDelay16 (packDelay16 (s));
+        worstRelErr = std::max (worstRelErr, std::abs (static_cast<double> (u - s)) / static_cast<double> (s));
+    }
+    check (worstRelErr < 2.0e-4, "companded delay word maintains < 2e-4 relative accuracy across full scale");
+
+    check (mapping::velocityMatrixFactor (0) == -128
+           && mapping::velocityMatrixFactor (80) == 0
+           && mapping::velocityMatrixFactor (100) == 54
+           && mapping::velocityMatrixFactor (127) == 128,
+           "velocity matrix table hits exact signed pivot points");
+    {
+        Patch base;
+        base.velocityMatrix.on = true;
+        base.velocityMatrix.filterDecay = 22;
+        base.filter.env.decay = 0;
+        const Patch v100 = withVelocity (base, 100.0 / 127.0);
+        check (v100.filter.env.decay == 9, "velocity matrix uses floor arithmetic shift (22 * 54 >> 7 == 9)");
+
+        base.filter.envDepth = 10;
+        base.velocityMatrix.envDepth = 63;
+        check (withVelocity (base, 0.0).filter.envDepth == 0, "positive bipolar depth clamps at zero");
+        base.filter.envDepth = -10;
+        check (withVelocity (base, 1.0).filter.envDepth == 0, "negative bipolar depth clamps at zero");
+
+        base.pan = PanMode::Off;
+        base.ampLfo = 10;
+        base.velocityMatrix.ampLfo = 63;
+        check (withVelocity (base, 0.0).ampLfo == 0, "amp LFO clamps at zero when pan is off");
+        base.pan = PanMode::Manual;
+        check (withVelocity (base, 0.0).ampLfo < 0, "manual pan LFO crosses zero across full range");
+    }
+
+    {
+        NoiseOsc n1, n2;
+        Random r1 (12345u), r2 (12345u);
+        n1.reset (r1);
+        n2.reset (r2);
+        n1.configure (261.6256, 1.0, 0.0);
+        n2.configure (261.6256, 1.0, 0.0);
+        double sumSq = 0.0;
+        bool deterministic = true;
+        for (int i = 0; i < 44100; ++i)
+        {
+            const Q23 a = n1.processQ23 (r1), b = n2.processQ23 (r2);
+            deterministic = deterministic && a == b;
+            const double fa = fromQ23 (a);
+            sumSq += fa * fa;
+        }
+        const double rmsOpen = std::sqrt (sumSq / 44100.0);
+        check (deterministic, "chaotic noise oscillator is deterministic for a fixed seed");
+        check (rmsOpen > 0.05 && rmsOpen < 0.25, "noise oscillator white-band RMS stays within expected level");
+
+        const auto measureNoiseRes = [] (double res)
+        {
+            NoiseOsc n;
+            Random r (777u);
+            n.reset (r);
+            n.configure (261.6256, 64.0 / 127.0, res);
+            for (int i = 0; i < 22050; ++i)
+                n.processQ23 (r);
+            double e = 0.0;
+            for (int i = 0; i < 88200; ++i)
+            {
+                const double y = fromQ23 (n.processQ23 (r));
+                e += y * y;
+            }
+            return std::sqrt (e / 88200.0);
+        };
+        check (measureNoiseRes (1.0) > measureNoiseRes (101.0 / 127.0) * 1.2,
+               "noise oscillator preserves full-resonance headroom at CTRL 2 = 127");
+    }
+
+    {
+        const double f1k = 2.0 * std::sin (kPi * 1000.0 / fs);
+        const auto gainQ23 = [f1k] (FilterType type, bool steep, double hz)
+        {
+            Filter f;
+            f.configure (f1k, 0.0, type, steep);
+            std::vector<double> x (44100);
+            for (int i = -88200; i < 44100; ++i)
+            {
+                const Q23 y = f.processQ23 (toQ23 (0.25 * std::sin (kTwoPi * hz * i / fs)));
+                if (i >= 0)
+                    x[static_cast<std::size_t> (i)] = fromQ23 (y) * 4.0;
+            }
+            return tone (x, hz);
+        };
+        near (db (gainQ23 (FilterType::LowPass, true, 8000) / gainQ23 (FilterType::LowPass, true, 4000)),
+              -24.5, 2.0, "Q23 LP24 slope at 0.25 amplitude");
+        near (db (gainQ23 (FilterType::HighPass, true, 125) / gainQ23 (FilterType::HighPass, true, 250)),
+              -24.0, 2.0, "Q23 HP24 slope at 0.25 amplitude");
+
+        Filter fRing;
+        fRing.configure (f1k, 1.0, FilterType::LowPass, true);
+        fRing.processQ23 (toQ23 (0.5));
+        for (int i = 0; i < 8820; ++i)
+            fRing.processQ23 (0);
+        std::vector<double> ring (8820);
+        for (auto& s : ring)
+            s = fromQ23 (fRing.processQ23 (0));
+        const double ringHz = peakHz (ring, 950, 1050, 2);
+        check (tone (ring, ringHz) > 1.0e-4, "Q23 filter rings past 100 cycles at full resonance");
+        near (ringHz, 1000.0, 10.0, "Q23 filter ring tracks cutoff");
+    }
+
+    {
+        AnalogOutput aZero, aDouble, aQ23;
+        aZero.prepare (OutputNode::Rack);
+        bool silent = true;
+        for (int i = 0; i < 88200; ++i)
+        {
+            const Stereo y0 = aZero.processQ23 ({ 0, 0 });
+            const Stereo ySub = aZero.processQ23 (i % 2 ? StereoQ23 { 63, -63 } : StereoQ23 { -63, 63 });
+            silent = silent && y0.l == 0.0 && y0.r == 0.0 && ySub.l == 0.0 && ySub.r == 0.0;
+        }
+        check (silent, "Q23 DAC path is strictly silent on zero and sub-step words");
+
+        aDouble.prepare (OutputNode::Rack);
+        aQ23.prepare (OutputNode::Rack);
+        std::vector<double> xD (44100), xQ (44100);
+        for (int i = -176400; i < 44100; ++i)
+        {
+            const double sample = 0.25 * std::sin (kTwoPi * 1000.0 * i / fs);
+            const Stereo yD = aDouble.process ({ sample, sample });
+            const Stereo yQ = aQ23.processQ23 ({ toQ23 (sample), toQ23 (sample) });
+            if (i >= 0)
+            {
+                xD[static_cast<std::size_t> (i)] = yD.l;
+                xQ[static_cast<std::size_t> (i)] = yQ.l;
+            }
+        }
+        near (db (tone (xQ, 1000.0) / tone (xD, 1000.0)), 0.0, 0.02,
+              "Q23 DAC path matches double path at quarter scale");
+    }
+
+    {
+        const double pw = mapping::pulseWidth (120.0 / 127.0);
+        const double inc = 2.0 * 220.0 / fs;
+        const Q23 pwQ = toQ23 (pw), incQ = toQ23 (inc);
+        double p = -1.0;
+        Q23 pQ = toQ23 (-1.0);
+        double eH = 0.0, eQ = 0.0;
+        for (int i = 0; i < 44100; ++i)
+        {
+            p = wrap2 (p + inc);
+            pQ = wrap24 (pQ + incQ);
+            const double h = osc::pulseHardware (p, inc, pw);
+            const double q = fromQ23 (osc::pulseQ23 (pQ, incQ, pwQ));
+            eH += h * h;
+            eQ += q * q;
+        }
+        near (db (std::sqrt (eQ / 44100.0) / std::sqrt (eH / 44100.0)), 0.0, 0.05,
+              "Q23 narrow pulse preserves unclipped swing before output scale");
+    }
+
+    {
+        const Coeff15 negB = splitTable15 (-31743);
+        const Coeff15 negT = splitTable15 (-30589);
+        check (negB.hi == -124 && negB.lo == 0 && negT.hi == -120 && negT.lo == 65,
+               "ToneControl negated 15-bit splits match signed coefficient words");
+
+        Patch velBass;
+        velBass.osc1 = { Wave1::Saw, 32, 0 };
+        velBass.balance = -64;
+        velBass.amp = { 0, 0, 127, 5 };
+        velBass.velocityMatrix.on = true;
+        velBass.velocityMatrix.bass = 63;
+        const auto renderFundamental = [] (const Patch& pat, int vel)
+        {
+            Engine eng;
+            eng.prepare (48000.0);
+            eng.setPatch (Part::Upper, pat);
+            eng.noteOn (45, vel);
+            std::vector<float> l (14400), r (14400);
+            eng.render (l.data(), r.data(), 14400);
+            std::vector<double> x (l.begin() + 4800, l.end());
+            return tone (x, 110.0, 48000.0);
+        };
+        check (db (renderFundamental (velBass, 127) / renderFundamental (velBass, 80)) > 6.0,
+               "velocity matrix updates ToneControl bass gain on note-on");
+    }
+
+    {
+        OscillatorPair osc;
+        Random rng (42u);
+        osc.prepare();
+        osc.trigger (rng, Wave1::Saw, true);
+        OscillatorPair::Controls c;
+        c.wave1 = Wave1::Saw;
+        c.hz1 = 110.0;
+        c.ctrl1 = 32.0 / 127.0;
+        c.gain1 = 1.0;
+        c.gain2 = 0.0;
+        osc.configure (c);
+        double mean = 0.0;
+        for (int i = 0; i < 88200; ++i)
+        {
+            const double y = osc.process (rng);
+            if (i >= 44100)
+                mean += y;
+        }
+        mean /= 44100.0;
+        check (mean < 0.0 && mean > -0.002,
+               "oscillator negative-MAC DC blocker settles to small negative equilibrium");
+
+        Delay d;
+        d.prepare();
+        d.configure (DelayType::PanLR, 48, 110, 120);
+        d.snap();
+        Chorus ch;
+        ch.reset();
+        ch.configure (ChorusType::SuperSlow, 127);
+        ch.snap();
+        FeedbackOsc fb;
+        fb.prepare();
+        fb.configure (220.0, 0.5, 0.9);
+        bool bounded = true;
+        for (int i = 0; i < 22050; ++i)
+        {
+            const Q23 in = toQ23 (i == 0 ? 0.5 : 0.0);
+            const StereoQ23 yd = d.processQ23 (in);
+            const StereoQ23 yc = ch.processMixQ23 ({ in, in });
+            const Q23 yf = fb.processQ23 (toQ23 (-0.5));
+            bounded = bounded && std::abs (yd.l) <= kQ23One && std::abs (yd.r) <= kQ23One
+                      && std::abs (yc.l) <= kQ23One && std::abs (yc.r) <= kQ23One
+                      && std::abs (yf) <= kQ23One;
+        }
+        check (bounded, "Delay, Chorus, and FeedbackOsc negative-MAC DC blockers remain bounded");
+    }
+
+    {
+        SuperSaw ssZero;
+        ssZero.configure (98.8741659278, 0.0, 0.0);
+        const int expectedZero[] { -6, -4, -1, 0, 1, 3, 5 };
+        for (int i = 0; i < 7; ++i)
+            check (ssZero.stepsFromCentre (i) == expectedZero[i],
+                   "SuperSaw 15-bit detune step matches at detune 0 for saw " + std::to_string (i));
+
+        SuperSaw ssFull;
+        ssFull.configure (1000.0, 1.0, 1.0);
+        check (-ssFull.stepsFromCentre (0) > ssFull.stepsFromCentre (6),
+               "SuperSaw 15-bit detune preserves asymmetric outer spread");
+    }
+
+    {
+        check (mapping::lfo1RateTable[127] == 32768u
+               && mapping::levelCurveTable[64] == 8321u
+               && mapping::levelCurveTable[127] == 32768u,
+               "integer rate and square-law level tables match exact anchor points");
+        Patch lfoPat;
+        lfoPat.osc1 = { Wave1::Triangle, 0, 0 };
+        lfoPat.balance = -64;
+        lfoPat.lfo1 = { LfoWave::Saw, 64, 0 };
+        lfoPat.pitchLfo = 32;
+        lfoPat.amp.sustain = 127;
+        Engine e1, e2;
+        e1.prepare (48000.0);
+        e2.prepare (48000.0);
+        e1.setPatch (Part::Upper, lfoPat);
+        e2.setPatch (Part::Upper, lfoPat);
+        e1.noteOn (60, 100);
+        e2.noteOn (60, 100);
+        std::vector<float> l1 (48000), r1 (48000), l2 (48000), r2 (48000);
+        e1.render (l1.data(), r1.data(), 48000);
+        e2.render (l2.data(), r2.data(), 48000);
+        check (l1 == l2 && r1 == r2, "16-bit integer LFO phase accumulator is deterministic");
+    }
+
+    {
+        AnalogOutput stereoDac;
+        stereoDac.prepare (OutputNode::Rack);
+        double maxDiff = 0.0;
+        bool silentZero = true;
+        for (int i = 0; i < 8192; ++i)
+        {
+            const Stereo z = stereoDac.processQ23 (i % 2 ? StereoQ23 { 63, -63 } : StereoQ23 { -63, 63 });
+            silentZero = silentZero && z.l == 0.0 && z.r == 0.0;
+        }
+        stereoDac.reset();
+        for (int i = 0; i < 8192; ++i)
+        {
+            const Q23 s = toQ23 (0.35 * std::sin (kTwoPi * 331.0 * i / fs));
+            const Stereo y = stereoDac.processQ23 ({ s, s });
+            maxDiff = std::max (maxDiff, std::abs (y.l - y.r));
+        }
+        check (silentZero && maxDiff > 0.0 && maxDiff < 2.0 / 131072.0,
+               "stereo DAC R-2R ladders stay zero on sub-step words and differ slightly across channels");
+    }
+}
+
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
-        { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy }, { "AnalogColor", analogColor } };
+        { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy }, { "AnalogColor", analogColor },
+        { "FixedPointAndMatrix", fixedPointAndMatrix } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();
