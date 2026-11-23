@@ -7,7 +7,7 @@ try:
     import mido
 except ImportError:
     mido=None
-PROG=int(sys.argv[1]);OUT=sys.argv[2];SPEC=sys.argv[3];NOTE=int(os.environ.get('NOTE','57'))
+PROG=int(sys.argv[1]);OUT=sys.argv[2];SPEC=sys.argv[3];NOTES=[int(n) for n in os.environ.get('NOTES',os.environ.get('NOTE','57')).split(',')];NOTE=NOTES[0]
 VAR=[(s.split(':')[0],[kv.split('=') for kv in s.split(':')[1].split(',') if kv]) for s in SPEC.split(';')]
 SR=88200;LAT=0.0957
 def capture():
@@ -23,10 +23,12 @@ def capture():
             for k,v in (('key_mode','SINGLE'),('arp',False)):jh.setp(k,v,True)
             for k in ('a_velocity','a_active_vel_asgn','a_active_ctrl_asgn'):jh.setp(k,False,True)
             for k,v in ov:
-                jh.setp(k,float(v),True);q=jh.p.parameters[k];vv=[str(x) for x in q.valid_values]
+                try:v=float(v)
+                except ValueError:v=v.replace('_',' ')
+                jh.setp(k,v,True);q=jh.p.parameters[k];vv=[str(x) for x in q.valid_values]
                 params[k]=[int(round(q.raw_value*(len(vv)-1))),len(vv),str(q.string_value)]
             jh._cur.clear();jh.paced([mido.Message('control_change',control=120,value=0,time=0)],0.4)
-            y=jh.play([(0.05,NOTE,100,2.0)],2.6);np.save(f'{OUT}/v_{label}.npy',y.astype('f4'));res[label]=params
+            y=jh.play([(0.05,n,100,2.0) for n in NOTES],2.6);np.save(f'{OUT}/v_{label}.npy',y.astype('f4'));res[label]=params
         return res
     json.dump(jh.session(work),open(f'{OUT}/variants.json','w'))
 def compare():
@@ -41,7 +43,7 @@ def compare():
     print('band (Hz)        ',' '.join(f'{int(b):5d}' for b in B[S]))
     for label,params in d.items():
         a=np.load(f'{OUT}/v_{label}.npy').astype(float)
-        ev=['0 node digital']+m.events(params)+[f'0.05 note {NOTE} 100',f'2.05 off {NOTE}']
+        ev=['0 node digital']+m.events(params)+[f'0.05 note {n} 100' for n in NOTES]+[f'2.05 off {n}' for n in NOTES]
         open(f'{OUT}/ev.txt','w').write('\n'.join(ev)+'\n');subprocess.run([H,f'{OUT}/ev.txt',f'{OUT}/o.f32',str(SR),'2.6','stereo'],check=True)
         b=np.fromfile(f'{OUT}/o.f32','<f4').astype(float).reshape(-1,2).T;b=np.concatenate([np.zeros((2,int(LAT*SR))),b],1)
         ba=bands(a);bb=bands(b)

@@ -9,9 +9,12 @@ bool unison (const Patch& p) noexcept
     return p.unison && p.osc1.wave != Wave1::FeedbackOsc;
 }
 
+// [measured] LEGATO alone does not make the part monophonic: JE-8086 plays a
+// three-note chord on Velo Syncoid (MONO off, LEGATO on) as three voices
+// (Tools/blackbox/variants.py, 2026-11-23). It shapes MONO's retriggers only.
 bool monophonic (const Patch& p) noexcept
 {
-    return p.mono || p.legato || p.unison || p.osc1.wave == Wave1::FeedbackOsc;
+    return p.mono || p.unison || p.osc1.wave == Wave1::FeedbackOsc;
 }
 
 constexpr double kMasterOutputGain = 12.0;
