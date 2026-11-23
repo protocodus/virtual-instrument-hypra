@@ -22,9 +22,11 @@ median gaps), the tone control, and the delay's times, feedback and level.
 The triangle's SHAPE above 0, the velocity matrix and the modulated chorus
 types are still estimates.
 
-![Front-panel draft](Docs/screenshots/front-panel-draft-2x.png)
+![The Rack Extension's front panel](Docs/screenshots/trancera-rack-front.png)
 
-The panel is a concept, not a built device.
+The Rack Extension's front panel, in the JP-8080's colours, rendered by its
+`Design/render_panels.py`. `Docs/screenshots/front-panel-draft-2x.png` is the
+earlier concept.
 
 ---
 
