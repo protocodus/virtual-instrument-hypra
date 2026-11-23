@@ -249,6 +249,26 @@ inline double lfoHz (int value) noexcept
     return lfoTable[i] * std::pow (lfoTable[i + 1] / lfoTable[i], (a - lo) / (hi - lo));
 }
 
+// [measured, black box] LFO 1 and the pitch envelope set to X-MOD: a
+// fraction of X-MOD's range on the pitch-depth curve (Moody Organ, depth -3,
+// shows no sidebands on JE-8086). The full-depth end is [inferred].
+inline double xmodModDepth (int value) noexcept { return pitchEnvSemitones (value) / pitchEnvTable[16]; }
+
+// [measured, black box] MULTI-FX LEVEL and DELAY LEVEL are square-law on
+// JE-8086 (delay echo at 32, 64, 96, 127: -28.8, -17.0, -9.9, -5.0 dB).
+inline double effectLevel (int value) noexcept { return unit (value) * unit (value); }
+
+// [measured level, inferred structure] Wet gain per chorus type, chosen so
+// that each type at LEVEL 127 adds the level it adds on JE-8086 on a held
+// triangle (from -0.2 dB for SUPER CHORUS FST to +4.1 dB for MID). The
+// modulation settings themselves are still guesses. MID stays at 1: its
+// held-note reading (+0.3 dB against +4.1) overshoots in chords.
+inline double chorusWetGain (ChorusType type) noexcept
+{
+    constexpr std::array<double, 12> gain { 1.402, 1.0, 0.079, 0.623, 0.153, 0.605, 0.166, 0.507, 0.636, 0.363, 0.19, 0.313 };
+    return gain[static_cast<std::size_t> (type)];
+}
+
 // [measured] SUSTAIN on JE-8086: the amp envelope's is square-law (64 plays
 // 11.9 dB down, every 16th value within 0.1 dB), the filter envelope's is
 // linear in cutoff steps (within 0.01).

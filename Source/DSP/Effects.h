@@ -104,7 +104,7 @@ public:
         type_ = type;
         target_ = std::min (mapping::delaySeconds (type, time) * kEngineRate, size - 3.0);
         feedback_ = mapping::delayFeedback (feedback);
-        level_ = mapping::delayLevel (type) * unit (level);
+        level_ = mapping::delayLevel (type) * mapping::effectLevel (level);
     }
 
     void snap() noexcept { delay_ = target_; }
@@ -174,7 +174,7 @@ public:
             type_ = type;
             prime_ = true;
         }
-        level_ = unit (level);
+        level_ = mapping::effectLevel (level) * mapping::chorusWetGain (type);
     }
 
     void control() noexcept

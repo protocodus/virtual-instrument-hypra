@@ -626,6 +626,55 @@ void sustainLaw()
     }
     near (10.0 * std::log10 (ex / ey), -11.9, 0.3, "sustain 64 plays 11.9 dB down");
 }
+
+// Factory-patch differences on JE-8086 (Dreams Are Made): key follow tracks
+// the sounding pitch, after OSC SHIFT.
+void keyFollowShift()
+{
+    const auto brightness = [] (int shift)
+    {
+        Patch p;
+        p.osc1.wave = Wave1::Saw;
+        p.balance = -64;
+        p.filter.cutoff = 40;
+        p.filter.keyFollow = -40;
+        p.oscShift = shift;
+        auto x = renderNote (p, fs, 0.8, 60);
+        x.erase (x.begin(), x.begin() + static_cast<long> (0.3 * fs));
+        return db (tone (x, 4.0 * 261.6256 * std::exp2 (shift)));
+    };
+    // Two octaves down with key follow -40 (-62.5 %) opens the filter by
+    // 15 steps; at 0 the pivot (C4) leaves it alone.
+    Patch flat;
+    flat.osc1.wave = Wave1::Saw;
+    flat.balance = -64;
+    flat.filter.cutoff = 40 + 15;
+    flat.oscShift = -2;
+    auto x = renderNote (flat, fs, 0.8, 60);
+    x.erase (x.begin(), x.begin() + static_cast<long> (0.3 * fs));
+    near (brightness (-2), db (tone (x, 4.0 * 261.6256 / 4.0)), 1.0, "key follow sees OSC SHIFT");
+}
+
+// Factory-patch differences on JE-8086 (Moody Organ): LFO 1 and the pitch
+// envelope reach X-MOD on the same depth curve as pitch, so a small depth
+// barely moves it.
+void xmodDestination()
+{
+    near (mapping::xmodModDepth (-3), -mapping::pitchEnvSemitones (3) / mapping::pitchEnvTable[16], 1e-12,
+          "X-MOD destination depth follows the pitch-depth curve");
+    check (std::abs (mapping::xmodModDepth (-3)) < 0.005, "depth 3 moves X-MOD by under 0.5 %");
+    near (mapping::xmodModDepth (63), 1.0, 1e-12, "full depth sweeps all of X-MOD");
+}
+
+// Factory-patch differences on JE-8086: effect levels are square-law, and
+// each chorus type adds the level the emulator adds.
+void effectLevels()
+{
+    near (mapping::effectLevel (64), 0.254, 0.002, "effect level 64 is a quarter");
+    near (mapping::effectLevel (127), 1.0, 1e-12, "effect level 127");
+    near (mapping::chorusWetGain (ChorusType::SuperFast), 0.079, 1e-9, "SUPER CHORUS FST adds almost no level");
+    near (mapping::chorusWetGain (ChorusType::SuperSlow), 1.402, 1e-9, "SUPER CHORUS SLW adds 4 dB at 127");
+}
 } // namespace
 
 void* operator new (std::size_t size)
@@ -643,7 +692,7 @@ int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
-        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw } };
+        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

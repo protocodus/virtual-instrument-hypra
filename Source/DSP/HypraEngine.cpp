@@ -344,7 +344,6 @@ void Engine::controlVoice (Voice& v, int part) noexcept
             pitchEnv = std::exp (-(v.age - rise) / std::max (mapping::envelopeTau (p.pitchDecay), 1e-9));
     }
 
-    const double envDepth = bipolar (p.pitchEnvDepth);
     const double semis = mapping::pitchLfoSemitones (p.pitchLfo) * lfo
                          + mapping::pitchEnvSemitones (p.pitchEnvDepth) * pitchEnv;
     const bool toXmod = p.destination == ModDestination::XMod;
@@ -381,7 +380,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
     c.width2 = std::clamp (unit (p.osc2.pulseWidth) + unit (p.osc2.pwmDepth) * 0.5 * (lfo + fade), 0.0, 1.0);
     c.xmod = unit (p.xmod);
     if (toXmod)
-        c.xmod = std::clamp (c.xmod + bipolar (p.pitchLfo) * lfo + envDepth * pitchEnv, 0.0, 1.0);
+        c.xmod = std::clamp (c.xmod + mapping::xmodModDepth (p.pitchLfo) * lfo + mapping::xmodModDepth (p.pitchEnvDepth) * pitchEnv, 0.0, 1.0);
     c.gain1 = mapping::balanceGain (p.balance, true);
     c.gain2 = mapping::balanceGain (p.balance, false);
     c.sync = p.osc2.sync;
@@ -390,7 +389,8 @@ void Engine::controlVoice (Voice& v, int part) noexcept
 
     const double velocityDepth = bipolar (p.velocityFilter) * (v.velocity - 0.5) * 5.0;
     const double octaves = mapping::cutoffOctaves (p.filter.cutoff)
-                           + mapping::keyFollow (p.filter.keyFollow) * (v.pitch - 60.0) / 12.0
+                           + mapping::keyFollow (p.filter.keyFollow) // [measured] after OSC SHIFT
+                               * (v.pitch + 12.0 * std::clamp (p.oscShift, -2, 2) - 60.0) / 12.0
                            + mapping::filterEnvSemitones (p.filter.envDepth) / 12.0 * v.filterEnv.value()
                            + mapping::filterLfoSemitones (p.filter.lfoDepth) / 12.0 * lfo
                            + mod_ * mapping::filterLfoSemitones (p.lfo2.filter) / 12.0 * s.lfo2
