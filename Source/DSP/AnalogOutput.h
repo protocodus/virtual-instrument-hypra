@@ -196,7 +196,14 @@ private:
             return std::clamp (std::nearbyint (x * 131072.0), -131072.0, 131071.0) / 131072.0;
         // The DSP's 24-bit word framed to 18 bits by dropping its low bits (a
         // floor), and the ladder's error for the code's upper eight bits.
-        const double code = std::clamp (std::floor (x * 131072.0), -131072.0, 131071.0);
+        // [inferred] A word under one DAC step either side is the DSP's settled
+        // zero: the fixed-point DSP's own tails end at zero, while this double
+        // engine's only approach it, and a floor would hold them at -1 step
+        // (about -108 dBFS, through the coupling caps for some 20 s).
+        const double scaled = x * 131072.0;
+        if (std::abs (scaled) < 1.0)
+            return 0.0;
+        const double code = std::clamp (std::floor (scaled), -131072.0, 131071.0);
         const auto segment = static_cast<std::size_t> ((static_cast<std::int32_t> (code) + 131072) >> 10);
         return code / 131072.0 + ladder_[segment];
     }

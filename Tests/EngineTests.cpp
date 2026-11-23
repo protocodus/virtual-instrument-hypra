@@ -1073,6 +1073,20 @@ void analogColor()
 
     const auto silent = run (true, OutputNode::Rack, 0.0, 1000.0);
     check (std::all_of (silent.begin(), silent.end(), [] (double v) { return v == 0.0; }), "silence stays exactly silent");
+    // A tail under one DAC step (here -1/3 step, which a floor would hold at
+    // -1) is the DSP's settled zero: no step held through the coupling caps.
+    {
+        AnalogOutput a;
+        a.prepare (OutputNode::Rack);
+        bool zero = true;
+        for (int i = 0; i < 88200; ++i)
+        {
+            const double w = (i % 2 ? -1.0 : 1.0) / 393216.0;
+            const Stereo y = a.process ({ w, -w });
+            zero = zero && y.l == 0.0 && y.r == 0.0;
+        }
+        check (zero, "a tail under one DAC step is silent");
+    }
     const auto digitalOn = run (true, OutputNode::Digital, 0.3, 1000.0), digitalOff = run (false, OutputNode::Digital, 0.3, 1000.0);
     check (digitalOn == digitalOff, "the digital node ignores the colour");
     std::vector<double> r1, r2;

@@ -9,7 +9,7 @@ no firmware, ROM data, samples, captured audio or factory patch data. Since
 2026-11-23 it is not clean-room: at the owner's risk, constants may be taken
 from an analysis of the JP-8000 firmware (tagged `[firmware]`).
 
-**Status: 0.9.0, for listening.** The engine is complete enough to judge the
+**Status: 0.9.1, for listening.** The engine is complete enough to judge the
 sound. Its Rack Extension is `Examples/Trancera` in protocodus/reason-rack-extensions.
 There is no plug-in, factory preset bank, arpeggiator, split mode or motion
 control. The saw, pulse and triangle-mod waveforms and the
@@ -74,6 +74,7 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.9.1 | `AnalogColor`'s DAC truncation treats a word under one DAC step as zero, so a release tail ends in exact silence instead of a -1 step held through the coupling caps for about 20 s (about -108 dBFS; it kept a host's silence detection from settling). |
 | 0.9.0 | Against fresh JE-8086 captures, 19 of 20 factory patches as played within 3 dB per region (was 8): the JP-8080 velocity matrix on the firmware's velocity curve; LEGATO no longer makes a part mono; the noise oscillator 6.5 dB lower. `AnalogColor` (on by default, `Engine::setAnalogColor`): the DAC truncates and carries an R-2R ladder error, and the jack op-amp rounds off peaks near its rail; no noise added, transparent below three quarters of the headroom. |
 | 0.8.0 | Renamed from Hypra to Trancera (owner, 2026-11-23): the `trancera` namespace, `Source/DSP/Trancera*` files, the `TranceraDSP` library and the repository. No change to the sound. |
 | 0.7.1 | The triangle-mod sine table is built at compile time, so the engine holds no global with a run-time initialiser (the Rack Extension toolchain refuses one). No audible change: the table differs from `std::sin` by under 1e-15. |
