@@ -220,7 +220,7 @@ Patch padPatch()
 
 Patch bassPatch()
 {
-    Patch p = single (Wave1::Saw, 32);
+    Patch p = single (Wave1::Saw, 0);
     p.balance = 0;
     p.osc2.wave = Wave2::Square;
     p.osc2.range = -12;
@@ -393,7 +393,7 @@ Audio waveforms()
 
 Audio syncLead()
 {
-    Patch patch = single (Wave1::Saw, 32);
+    Patch patch = single (Wave1::Saw, 0);
     patch.balance = 50;
     patch.osc2.sync = true;
     patch.osc2.range = 3;
@@ -486,7 +486,7 @@ Audio filters()
             p.sweep (1.06, 1.0, 116, 22, [] (Patch& x, int v) { x.filter.cutoff = v; });
             out.append (p.render (2.5));
         }
-    Patch whistle = single (Wave1::Saw, 32);
+    Patch whistle = single (Wave1::Saw, 0);
     whistle.filter.resonance = 127;
     Performance p (whistle);
     p.note (0, 3, 36);
@@ -549,7 +549,7 @@ Audio chorusTypes()
     Audio out;
     for (int i = 0; i < 12; ++i)
     {
-        Patch patch = single (Wave1::Saw, 32);
+        Patch patch = single (Wave1::Saw, 0);
         patch.filter.cutoff = 100;
         patch.amp = { 2, 20, 120, 9 };
         patch.effects.chorusType = static_cast<ChorusType> (i);

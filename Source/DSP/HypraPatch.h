@@ -22,7 +22,7 @@ enum class DelayType : std::uint8_t { PanLR, PanRL, PanShort, MonoShort, MonoLon
 struct Osc1Params
 {
     Wave1 wave { Wave1::SuperSaw };
-    int ctrl1 { 64 }; // detune, offset, cutoff, harmonics, width or shape
+    int ctrl1 { 0 }; // detune, offset, cutoff, harmonics, width or shape (0 as on JE-8086)
     int ctrl2 { 0 };  // mix, LFO 1 depth, resonance, feedback amount or PWM depth
 };
 

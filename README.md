@@ -6,7 +6,7 @@ once its sound is approved. "Hypra" is a working name. It is an independent
 original implementation, not affiliated with or licensed by Roland, and holds
 no firmware, ROM data, samples, captured audio or factory patch data.
 
-**Status: 0.4.0, for listening.** The engine is complete enough to judge the
+**Status: 0.4.1, for listening.** The engine is complete enough to judge the
 sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
 mode or motion control. The saw, pulse and triangle-mod waveforms and the
 filter are fitted to an emulator running the JP-8000's own system software,
@@ -67,6 +67,7 @@ or inferred here.
 
 | Version | Change |
 | --- | --- |
+| 0.4.1 | Oscillator SHAPE defaults to 0, as on JE-8086 (it was 64, a brighter wave), and the demo saws use SHAPE 0, the rounder saw of the factory patches, instead of the plain saw at 32. |
 | 0.4.0 | Envelope segments start late (25 ms from 30), short attacks are faster, FADE ramps in decibels, LFO 2 has its own rate, amp LFO, pan, OSC BALANCE (constant power), X-MOD (FM in Hz) and the noise oscillator (the main filter on the key) follow JE-8086. Velocity is off by default, as there. |
 | 0.3.0 | Envelopes, LFO 1 rate and depths, pitch and filter envelope depths, key follow and portamento follow black-box measurements of JE-8086: one exponential time constant per value for attack, decay and release, a glide of fixed time, key follow at half strength below zero. The demo patches keep their old timing under the new tables. |
 | 0.2.0 | The filter, saw SHAPE, pulse width and triangle mod follow black-box measurements of JE-8086: a different filter structure, cutoff a semitone per step, a measured resonance curve, -24 dB as two identical stages. |
