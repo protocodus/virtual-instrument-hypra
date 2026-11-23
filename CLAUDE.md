@@ -8,12 +8,14 @@ Rack Extension will be a thin adapter over it.
   or publish until they do.
 - `Source/DSP/` is JUCE-free C++17. No allocation, file I/O, locks or
   exceptions on the audio thread.
-- Original code only. Do not read or copy Roland firmware, disassemblies, or
-  emulators and write-ups that reproduce firmware code or tables. Manuals,
-  service notes, recordings and black-box measurements are the evidence.
-  JE-8086 may be played and measured as an instrument (owner, 2026-11-22);
-  its source, its technical page and the 39C3 talk stay unread.
-- Tag every constant `[settled]`, `[measured]` or `[inferred]` beside the
+- Not clean-room since 2026-11-23: the owner accepted the risk and asked
+  for the JE-8086 emulator (GPL) and the JP-8000 firmware it runs to be
+  analysed. Keep gearmulator source, ROM images, firmware dumps and
+  disassemblies outside this repository; write Hypra's own code from what
+  they show, and tag such constants `[firmware]` with the routine they
+  came from. Anything copied verbatim from gearmulator brings the GPL with
+  it, so do not paste its code here.
+- Tag every constant `[settled]`, `[measured]`, `[firmware]` or `[inferred]` beside the
   code that uses it, and keep `Docs/research/hardware-model-2026-11-22.md`
   in step.
 - A change is done when `ctest --test-dir build-dsp` passes in a Release

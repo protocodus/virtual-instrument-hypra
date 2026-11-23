@@ -4,7 +4,9 @@ Hypra is a proof of concept of an eight-voice virtual-analog synthesizer
 modelling the Roland JP-8000 (1997), meant to become a Reason Rack Extension
 once its sound is approved. "Hypra" is a working name. It is an independent
 original implementation, not affiliated with or licensed by Roland, and holds
-no firmware, ROM data, samples, captured audio or factory patch data.
+no firmware, ROM data, samples, captured audio or factory patch data. Since
+2026-11-23 it is not clean-room: at the owner's risk, constants may be taken
+from an analysis of the JP-8000 firmware (tagged `[firmware]`).
 
 **Status: 0.6.0, for listening.** The engine is complete enough to judge the
 sound. There is no plug-in, Rack wrapper, preset bank, arpeggiator, split
