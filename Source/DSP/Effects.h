@@ -13,25 +13,72 @@ namespace hypra
 class ToneControl
 {
 public:
-    void reset() noexcept { low_ = high_ = 0.0; }
+    void reset() noexcept { lowState_ = highState_ = 0.0; }
 
-    // [inferred] +/-12 dB shelves at 250 Hz and 4 kHz.
+    // [measured, black box] JE-8086 TONE CONTROL: first-order shelves.
+    // TREBLE turns above a fixed 940 Hz (+9.8 dB at 32, +14.6 at 63); BASS
+    // below a fixed 435 Hz (+6.5 dB at 32, +28.7 at 63, which still rises
+    // at 31 Hz). Cuts mirror the boosts. Gains in dB are straight between
+    // 0, 32 and 63.
     void configure (int bass, int treble) noexcept
     {
-        bass_ = std::pow (10.0, 12.0 * bipolar (bass) / 20.0) - 1.0;
-        treble_ = std::pow (10.0, 12.0 * bipolar (treble) / 20.0) - 1.0;
+        low_ = shelf (gainDb (bass, 6.52, 28.67), true);
+        high_ = shelf (gainDb (treble, 9.82, 14.61), false);
     }
 
     double process (double x) noexcept
     {
-        low_ += lowPole_ * (x - low_);
-        high_ += highPole_ * (x - high_);
-        return x + bass_ * low_ + treble_ * (x - high_);
+        return section (high_, highState_, section (low_, lowState_, x));
     }
 
 private:
-    double lowPole_ { onePole (250.0) }, highPole_ { onePole (4000.0) };
-    double low_ { 0.0 }, high_ { 0.0 }, bass_ { 0.0 }, treble_ { 0.0 };
+    struct Coefficients
+    {
+        double b0 { 1.0 }, b1 { 0.0 }, a1 { 0.0 };
+    };
+
+    static double gainDb (int value, double at32, double at63) noexcept
+    {
+        const double v = std::abs (std::clamp (value, -64, 63) * 1.0);
+        const double g = v <= 32.0 ? at32 * v / 32.0 : at32 + (at63 - at32) * std::min (1.0, (v - 32.0) / 31.0);
+        return value < 0 ? -g : g;
+    }
+
+    // Bilinear first-order shelf. Low: (s + G w) / (s + w) with the upper
+    // turn at 435 Hz; high: (G s + w) / (s + w) with the lower turn at 940 Hz.
+    // A cut is the boost's inverse.
+    static Coefficients shelf (double gainDb, bool low) noexcept
+    {
+        const double g = std::pow (10.0, std::abs (gainDb) / 20.0);
+        const double turn = low ? 435.0 / g : 940.0 * g;
+        const double k = std::tan (kPi * std::min (turn, 0.45 * kEngineRate) / kEngineRate);
+        // analog (n1 s + n0) / (d1 s + d0) with s normalised to w
+        double n1 = 1.0, n0 = low ? g : 1.0, d1 = 1.0, d0 = 1.0;
+        if (! low)
+            n1 = g;
+        if (gainDb < 0.0)
+        {
+            std::swap (n1, d1);
+            std::swap (n0, d0);
+        }
+        const double a0 = d1 + d0 * k;
+        Coefficients c;
+        c.b0 = (n1 + n0 * k) / a0;
+        c.b1 = (n0 * k - n1) / a0;
+        c.a1 = (d0 * k - d1) / a0;
+        return c;
+    }
+
+    static double section (const Coefficients& c, double& state, double x) noexcept
+    {
+        // transposed direct form II
+        const double y = c.b0 * x + state;
+        state = c.b1 * x - c.a1 * y;
+        return y;
+    }
+
+    Coefficients low_, high_;
+    double lowState_ { 0.0 }, highState_ { 0.0 };
 };
 
 class Delay
@@ -56,8 +103,8 @@ public:
     {
         type_ = type;
         target_ = std::min (mapping::delaySeconds (type, time) * kEngineRate, size - 3.0);
-        feedback_ = 0.93 * unit (feedback);
-        level_ = 0.85 * unit (level);
+        feedback_ = mapping::delayFeedback (feedback);
+        level_ = mapping::delayLevel (type) * unit (level);
     }
 
     void snap() noexcept { delay_ = target_; }
@@ -84,7 +131,8 @@ public:
         write_ = (write_ + 1) & mask;
         if (mono)
             return { level_ * l, level_ * l };
-        return type_ == DelayType::PanRL ? Stereo { level_ * r, level_ * l }
+        // [measured] PANNING SHORT answers on the right first, like R->L.
+        return type_ == DelayType::PanRL || type_ == DelayType::PanShort ? Stereo { level_ * r, level_ * l }
                                         : Stereo { level_ * l, level_ * r };
     }
 
@@ -229,8 +277,8 @@ private:
         { 0.0, 5.5, 0.15, 0.55, 0.25, 1, 6, false },  // DEEP PHASING SLW
         { 0.0, 6.5, 0.09, 0.82, 0.10, 1, 12, false }, // JET PHASING
         { 3.0, 2.6, 0.90, -0.75, 0.50, 1, 0, false }, // TWISTING
-        { 2.3, 0.0, 0.00, 0.80, 0.00, 1, 0, false },  // FREEZE PHASE 1
-        { 5.1, 0.0, 0.00, 0.80, 0.00, 1, 0, false },  // FREEZE PHASE 2
+        { 12.1, 0.0, 0.00, 0.35, 0.00, 1, 0, false }, // FREEZE PHASE 1 [measured comb, 11.6-12.6 ms, weak]
+        { 0.92, 0.0, 0.00, 0.10, 0.00, 1, 0, false }, // FREEZE PHASE 2 [measured comb, 0.92 ms, faint]
     } };
 
     struct Tap { double delay { 441.0 }, step { 0.0 }; };

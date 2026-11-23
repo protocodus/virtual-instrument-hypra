@@ -88,9 +88,8 @@ at 34 and 73 kHz.
 | Release and decay below 10 | the fast part only, not the tail | finer captures |
 | Velocity matrix, ring modulation, LFO to X-MOD | old guesses | black-box sweeps |
 | Control rate | 2.76 kHz with interpolated cutoff and gain | stepping in a fast sweep |
-| Tone control | 12 dB at full travel | swept response |
-| Chorus and flanger types | names from the manual, settings chosen here | impulse response per type |
-| Delay feedback and taper | 93 % maximum, square law | impulse response |
+| Modulated chorus and flanger types | names from the manual, settings chosen here | a cleaner capture method |
+| Delay tone and LEVEL below 127 | flat, linear | clicks at several levels |
 | Headroom and clipping | hard clip at the end of the DSP | overdriven recording |
 | Unison detune spread | even, +/-12 cents by default | a recording |
 

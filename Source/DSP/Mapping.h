@@ -348,10 +348,37 @@ inline double delayMaximum (DelayType type) noexcept
 }
 
 // [inferred] Square-law TIME taper.
+// [measured, black box] TIME on JE-8086 (MONO LONG at 0, 16 ... 112 and
+// 127, geometric between): 25 ms at 16, 0.2 s at 64, 0.6 s at 112 and a
+// jump to the full 1.25 s at 127. The other types scale it by their
+// maximum (PANNING 64 measured 0.1 s).
 inline double delaySeconds (DelayType type, int value) noexcept
 {
-    const double v = (std::clamp (value, 0, 127) + 1) / 128.0;
-    return std::max (0.001, delayMaximum (type) * v * v);
+    constexpr std::array<double, 9> shape { 0.0024, 0.02024, 0.05696, 0.10176, 0.16, 0.2324, 0.34176, 0.48008, 1.0 };
+    const double v = std::clamp (value, 0, 127);
+    const std::size_t i = std::min<std::size_t> (static_cast<std::size_t> (v / 16.0), 7);
+    const double lo = 16.0 * static_cast<double> (i), hi = i == 7 ? 127.0 : lo + 16.0;
+    const double k = shape[i] * std::pow (shape[i + 1] / shape[i], (v - lo) / (hi - lo));
+    return std::max (0.001, delayMaximum (type) * k);
+}
+
+// [measured, black box] FEEDBACK: each repeat 2.2 dB down at 127, 7 dB at
+// 96, 14 dB at 64 (square law, 0.776 at the top).
+inline double delayFeedback (int value) noexcept { return 0.776 * unit (value) * unit (value); }
+
+// [measured, black box] Echo level at LEVEL 127 against the dry note:
+// -2.3 dB for MONO LONG, -2.9 dB panning, -3.5 dB for the short types.
+inline double delayLevel (DelayType type) noexcept
+{
+    switch (type)
+    {
+        case DelayType::MonoLong: return 0.767;
+        case DelayType::PanLR:
+        case DelayType::PanRL: return 0.716;
+        case DelayType::PanShort:
+        case DelayType::MonoShort: break;
+    }
+    return 0.668;
 }
 
 // [settled] OM p.57: +/-24 semitones with +/-50 cents, or four octaves of

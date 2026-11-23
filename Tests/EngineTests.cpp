@@ -394,11 +394,14 @@ void effects()
         for (int i = 0; i < 130000 && first < 0; ++i)
         {
             const auto y = d.process (i == 0 ? 1.0 : 0.0);
-            if (i > 0 && std::abs (y.l) > 0.05)
+            if (i > 0 && std::abs (type == DelayType::PanShort ? y.r : y.l) > 0.05)
                 first = i;
         }
         near (first, seconds * fs, 3.0, "delay maximum");
     }
+    // JE-8086: MONO LONG at 64 answers after 0.2 s; feedback 127 loses 2.2 dB a repeat.
+    near (mapping::delaySeconds (DelayType::MonoLong, 64), 0.2, 1e-9, "delay time 64");
+    near (db (mapping::delayFeedback (127)), -2.2, 0.05, "feedback 127");
 }
 
 void stability()
@@ -577,6 +580,30 @@ void modulation()
     near (mapping::noiseCoefficient (261.6256, 76.0 / 127.0), 2.0 * kTwoPi * 261.6256 / fs, 1e-12, "noise cutoff, a semitone a step");
 }
 
+
+// Round 5 on JE-8086: TONE CONTROL as first-order shelves.
+void toneControl()
+{
+    const auto gainAt = [] (int bass, int treble, double hz)
+    {
+        ToneControl t;
+        t.configure (bass, treble);
+        std::vector<double> x (static_cast<std::size_t> (fs));
+        for (std::size_t i = 0; i < x.size(); ++i)
+            x[i] = t.process (std::sin (kTwoPi * hz * static_cast<double> (i) / fs));
+        x.erase (x.begin(), x.begin() + 44100);
+        return db (tone (x, hz));
+    };
+    near (gainAt (0, 0, 1000.0), 0.0, 0.05, "tone flat at 0");
+    near (gainAt (0, 63, 16000.0), 14.3, 0.8, "treble +63 lifts 16 kHz 14 dB");
+    near (gainAt (0, 32, 16000.0), 9.7, 0.8, "treble +32 lifts 16 kHz 10 dB");
+    near (gainAt (0, -64, 16000.0), -14.4, 0.8, "treble -64 cuts 16 kHz 14 dB");
+    near (gainAt (0, 63, 250.0), 0.3, 0.8, "treble leaves the bass");
+    near (gainAt (63, 0, 31.5), 22.2, 1.5, "bass +63 lifts 31 Hz 22 dB");
+    near (gainAt (32, 0, 63.0), 6.7, 1.0, "bass +32 lifts 63 Hz 7 dB");
+    near (gainAt (-64, 0, 31.5), -22.5, 1.5, "bass -64 cuts 31 Hz 22 dB");
+    near (gainAt (63, 0, 4000.0), 0.2, 0.5, "bass leaves the treble");
+}
 } // namespace
 
 void* operator new (std::size_t size)
@@ -594,7 +621,7 @@ int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
-        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation } };
+        { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

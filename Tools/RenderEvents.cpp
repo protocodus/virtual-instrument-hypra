@@ -34,7 +34,8 @@ bool set (Patch& p, const std::string& name, int v)
         { "pitchenv", &p.pitchEnvDepth }, { "pitchenv.a", &p.pitchAttack }, { "pitchenv.d", &p.pitchDecay },
         { "portamento.time", &p.portamentoTime }, { "lfo1.fade", &p.lfo1.fade }, { "lfo2.rate", &p.lfo2.rate },
         { "lfo2.pitch", &p.lfo2.pitch }, { "lfo2.filter", &p.lfo2.filter }, { "lfo2.amp", &p.lfo2.amp },
-        { "xmod", &p.xmod }, { "amplfo", &p.ampLfo } };
+        { "xmod", &p.xmod }, { "amplfo", &p.ampLfo }, { "chorus", &p.effects.chorus },
+        { "delay.time", &p.effects.delayTime }, { "delay.feedback", &p.effects.feedback }, { "delay", &p.effects.delay } };
     if (const auto it = ints.find (name); it != ints.end())
         *it->second = v;
     else if (name == "osc1.wave")
@@ -55,6 +56,10 @@ bool set (Patch& p, const std::string& name, int v)
         p.osc2.wave = static_cast<Wave2> (v);
     else if (name == "pan")
         p.pan = static_cast<PanMode> (v);
+    else if (name == "chorus.type")
+        p.effects.chorusType = static_cast<ChorusType> (v);
+    else if (name == "delay.type")
+        p.effects.delayType = static_cast<DelayType> (v);
     else if (name == "ring")
         p.ring = v != 0;
     else
