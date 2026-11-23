@@ -15,6 +15,28 @@ bool monophonic (const Patch& p) noexcept
 }
 
 constexpr double kMasterOutputGain = 12.0;
+
+struct EnvLfoFlags
+{
+    bool ampActive, ampEdge;
+    bool filtActive, filtEdge;
+    bool filtUseEnvSpeed;
+};
+
+EnvLfoFlags envLfoFlags (const Patch& p, bool lfoEdge, double modWheel) noexcept
+{
+    const bool ampLfo1 = p.pan == PanMode::Off && p.ampLfo != 0;
+    const bool ampLfo2 = p.lfo2.amp != 0 && modWheel > 0.0;
+    const bool filtLfo1 = p.filter.lfoDepth != 0;
+    const bool filtLfo2 = p.lfo2.filter != 0;
+    return {
+        ampLfo1 || ampLfo2,
+        ampLfo1 && lfoEdge,
+        filtLfo1 || filtLfo2,
+        filtLfo1 && lfoEdge,
+        p.filter.envDepth != 0
+    };
+}
 } // namespace
 
 void Engine::prepare (double hostRate, std::uint32_t seed)
@@ -35,6 +57,10 @@ void Engine::reset() noexcept
     for (Voice& v : voices_)
     {
         v.active = v.held = v.sustained = false;
+        v.portaDelta = 0.0;
+        v.portaRemain = 0;
+        v.fadePhase = 16384;
+        v.qSnapTicks = 0;
         v.ampEnv.reset();
         v.filterEnv.reset();
         v.pitchEnv.reset();
@@ -49,6 +75,7 @@ void Engine::reset() noexcept
         s.lfoPhase = s.lfoHeld = s.lfo1 = s.lfo2Phase = s.lfo2 = 0.0;
         s.lastPitch = 60.0;
         s.hasPlayed = false;
+        s.lfoEdge = false;
         s.panL = s.panTargetL = mapping::panCenterGain;
         s.panR = s.panTargetR = mapping::panCenterGain;
         s.tone.reset();
@@ -60,7 +87,7 @@ void Engine::reset() noexcept
     bend_ = mod_ = 0.0;
     sustain_ = false;
     order_ = 0;
-    untilControl_ = 0;
+    untilControl_ = kEnvelopeInterval;
 }
 
 Engine::Span Engine::span (int part) const noexcept
@@ -93,18 +120,31 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
     const bool becameMono = monophonic (patch)
                             && (! monophonic (s.patch) || unison (patch) != unison (s.patch));
     s.patch = patch;
-    s.lfoStep = mapping::lfoHz (patch.lfo1.rate) / kControlRate;
-    s.lfo2Step = mapping::lfo2Hz (patch.lfo2.rate) / kControlRate;
-    s.fade = mapping::fadeSeconds (patch.lfo1.fade);
-    s.glideSeconds = patch.portamento ? mapping::portamentoSeconds (patch.portamentoTime) : 0.0;
+    s.lfoStep = mapping::lfoHz (patch.lfo1.rate) / kEnvelopeRate;
+    s.lfo2Step = mapping::lfo2Hz (patch.lfo2.rate) / kEnvelopeRate;
     const EffectParams& fx = patch.effects;
     s.tone.configure (fx.bass, fx.treble);
     s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay);
     s.chorus.configure (fx.chorusType, fx.chorus);
+    if (patch.pan == PanMode::Off)
+    {
+        s.panTargetL = s.panTargetR = mapping::panCenterGain;
+    }
+    else if (patch.pan == PanMode::Manual)
+    {
+        const int idx = std::clamp (patch.ampLfo + 64, 0, 127);
+        s.panTargetL = mapping::panLeft (idx);
+        s.panTargetR = mapping::panRight (idx);
+    }
     if (! s.hasPlayed)
     {
         s.delay.snap();
         s.chorus.snap();
+        if (patch.pan == PanMode::Off || patch.pan == PanMode::Manual)
+        {
+            s.panL = s.panTargetL;
+            s.panR = s.panTargetR;
+        }
     }
 
     const Span range = span (part);
@@ -141,16 +181,37 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
     v.sustained = false;
     v.target = note;
     if (! (p.portamento && mayGlide))
+    {
         v.pitch = note;
-    else if (fresh || ! monophonic (p))
-        v.pitch = s.lastPitch;
-    const double ticks = s.glideSeconds * kControlRate;
-    v.glideStep = ticks > 0.0 ? std::abs (v.target - v.pitch) / ticks : 1.0e9;
+        v.portaDelta = 0.0;
+        v.portaRemain = 0;
+    }
+    else
+    {
+        if (fresh || ! monophonic (p))
+            v.pitch = s.lastPitch;
+        v.portaDelta = v.pitch - v.target;
+        if (p.portamentoTime <= 0)
+        {
+            v.pitch = note;
+            v.portaDelta = 0.0;
+            v.portaRemain = 0;
+        }
+        else
+        {
+            v.portaRemain = 8192;
+        }
+    }
     if (! start)
+    {
+        controlVoice (v, part, false);
         return;
+    }
 
     v.velocity = velocity / 127.0;
-    v.age = 0.0;
+    const auto fadeIdx = static_cast<std::size_t> (std::clamp (p.lfo1.fade, 0, 127));
+    v.fadePhase = std::min (16384, static_cast<int> (mapping::fadeRateTable[fadeIdx]));
+    v.qSnapTicks = 2;
     if (fresh)
     {
         v.filter.reset();
@@ -159,18 +220,19 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
         v.filterEnv.reset();
         v.pitchEnv.reset();
     }
+    const EnvLfoFlags flags = envLfoFlags (p, s.lfoEdge, mod_);
     v.ampEnv.configure (p.amp.attack, p.amp.decay, mapping::ampSustain (p.amp.sustain), p.amp.release);
-    v.ampEnv.trigger();
+    v.ampEnv.trigger (flags.ampActive, flags.ampEdge, true);
     v.filterEnv.configure (p.filter.env.attack, p.filter.env.decay,
                            mapping::filterSustain (p.filter.env.sustain), p.filter.env.release);
-    v.filterEnv.trigger();
+    v.filterEnv.trigger (flags.filtActive, flags.filtEdge, flags.filtUseEnvSpeed);
     v.pitchEnv.configure (p.pitchAttack, p.pitchDecay, 0.0, p.pitchDecay);
     v.pitchEnv.trigger();
 
     if (fresh || ! monophonic (p))
         v.oscillators.trigger (random_, p.osc1.wave, fresh);
     v.active = true;
-    controlVoice (v, part);
+    controlVoice (v, part, false);
 }
 
 void Engine::startMono (int part, int note, int velocity, bool retrigger) noexcept
@@ -304,16 +366,32 @@ int Engine::activeVoices() const noexcept
     return count;
 }
 
-void Engine::controlVoice (Voice& v, int part) noexcept
+void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
 {
     const PartState& s = parts_[static_cast<std::size_t> (part)];
     const Patch& p = s.patch;
-    v.age += 1.0 / kControlRate;
-    if (v.pitch != v.target)
-        v.pitch = v.target > v.pitch ? std::min (v.target, v.pitch + v.glideStep)
-                                     : std::max (v.target, v.pitch - v.glideStep);
+    if (advanceTick)
+    {
+        if (v.portaRemain > 0)
+        {
+            const auto portaIdx = static_cast<std::size_t> (std::clamp (p.portamentoTime, 0, 127));
+            v.portaRemain = std::max (0, v.portaRemain - static_cast<int> (mapping::portamentoRate[portaIdx]));
+            v.pitch = v.target + v.portaDelta * (static_cast<double> (v.portaRemain) / 8192.0);
+        }
+        if (v.fadePhase < 16384)
+        {
+            const auto fadeIdx = static_cast<std::size_t> (std::clamp (p.lfo1.fade, 0, 127));
+            v.fadePhase = std::min (16384, v.fadePhase + static_cast<int> (mapping::fadeRateTable[fadeIdx]));
+        }
+        const EnvLfoFlags flags = envLfoFlags (p, s.lfoEdge, mod_);
+        v.ampEnv.tick100Hz (flags.ampActive, flags.ampEdge, true);
+        v.filterEnv.tick100Hz (flags.filtActive, flags.filtEdge, flags.filtUseEnvSpeed);
+        v.pitchEnv.tick100Hz();
+        if (v.qSnapTicks > 0)
+            --v.qSnapTicks;
+    }
 
-    const double fade = mapping::fadeLevel (v.age, s.fade);
+    const double fade = mapping::fadeLevelFromPhase (v.fadePhase);
     const double lfo = s.lfo1 * fade;
     const double pitchEnv = p.pitchEnvDepth != 0 ? v.pitchEnv.value() : 0.0;
 
@@ -338,8 +416,6 @@ void Engine::controlVoice (Voice& v, int part) noexcept
     switch (p.osc1.wave)
     {
         case Wave1::Square:
-            c.ctrl1 = std::clamp (c.ctrl1 + c.ctrl2 * 0.5 * (lfo + fade), 0.0, 1.0);
-            break;
         case Wave1::TriangleMod:
         case Wave1::Saw:
         case Wave1::Triangle:
@@ -350,7 +426,7 @@ void Engine::controlVoice (Voice& v, int part) noexcept
         case Wave1::FeedbackOsc:
             break;
     }
-    c.width2 = std::clamp (unit (p.osc2.pulseWidth) + unit (p.osc2.pwmDepth) * 0.5 * (lfo + fade), 0.0, 1.0);
+    c.width2 = std::clamp (unit (p.osc2.pulseWidth) + unit (p.osc2.pwmDepth) * lfo, 0.0, 1.0);
     c.xmod = unit (p.xmod);
     if (toXmod)
         c.xmod = std::clamp (c.xmod + mapping::xmodModDepth (p.pitchLfo) * lfo + mapping::xmodModDepth (p.pitchEnvDepth) * pitchEnv, 0.0, 1.0);
@@ -368,8 +444,9 @@ void Engine::controlVoice (Voice& v, int part) noexcept
                            + mapping::filterLfoSemitones (p.filter.lfoDepth) / 12.0 * lfo
                            + mod_ * mapping::filterLfoSemitones (p.lfo2.filter) / 12.0 * s.lfo2
                            + velocityDepth;
+    const double qAlpha = v.qSnapTicks > 0 ? 0.875 : (1.0 / 512.0);
     v.filter.configure (mapping::cutoffCoefficient (octaves), unit (p.filter.resonance), p.filter.type, p.filter.steep,
-                        p.filter.envDepth != 0 ? v.filterEnv.filterSmootherAlpha() : (1.0 / 512.0));
+                        v.filterEnv.smootherAlpha(), qAlpha);
 
     double ampBase = 0.5 * mapping::balanceAmpComp (p.balance) * mapping::effectLevel (p.level)
                      * (1.0 - unit (p.velocityAmp) * (1.0 - v.velocity));
@@ -386,23 +463,38 @@ void Engine::control() noexcept
     for (int part = 0; part < partCount(); ++part)
     {
         PartState& s = parts_[static_cast<std::size_t> (part)];
+        const double prevPhase = s.lfoPhase;
         s.lfoPhase += s.lfoStep;
-        if (s.lfoPhase >= 1.0)
-        {
-            s.lfoPhase -= 1.0;
+        const bool wrapped = s.lfoPhase >= 1.0;
+        if (wrapped)
+            s.lfoPhase -= std::floor (s.lfoPhase);
+        const bool halfToggle = wrapped || ((prevPhase >= 0.5) != (s.lfoPhase >= 0.5));
+        if (halfToggle)
             s.lfoHeld = s.lfoRandom.bipolarValue();
-        }
+
         const double p = s.lfoPhase;
         switch (s.patch.lfo1.wave)
         {
-            case LfoWave::Triangle: s.lfo1 = osc::triangle (p < 0.75 ? p + 0.25 : p - 0.75); break;
-            case LfoWave::Saw: s.lfo1 = 1.0 - 2.0 * p; break;
-            case LfoWave::Square: s.lfo1 = p < 0.5 ? 1.0 : -1.0; break;
-            case LfoWave::SampleHold: s.lfo1 = s.lfoHeld; break;
+            case LfoWave::Triangle:
+                s.lfo1 = osc::triangle (p < 0.75 ? p + 0.25 : p - 0.75);
+                s.lfoEdge = false;
+                break;
+            case LfoWave::Saw:
+                s.lfo1 = 1.0 - 2.0 * p;
+                s.lfoEdge = wrapped;
+                break;
+            case LfoWave::Square:
+                s.lfo1 = p < 0.5 ? 1.0 : -1.0;
+                s.lfoEdge = halfToggle;
+                break;
+            case LfoWave::SampleHold:
+                s.lfo1 = s.lfoHeld;
+                s.lfoEdge = halfToggle;
+                break;
         }
         s.lfo2Phase += s.lfo2Step;
         if (s.lfo2Phase >= 1.0)
-            s.lfo2Phase -= 1.0;
+            s.lfo2Phase -= std::floor (s.lfo2Phase);
         s.lfo2 = osc::triangle (s.lfo2Phase < 0.75 ? s.lfo2Phase + 0.25 : s.lfo2Phase - 0.75);
 
         if (s.patch.pan == PanMode::Off)
@@ -425,20 +517,19 @@ void Engine::control() noexcept
         const Span range = span (part);
         for (int i = range.first; i < range.first + range.count; ++i)
             if (Voice& v = voices_[static_cast<std::size_t> (i)]; v.active)
-                controlVoice (v, part);
+                controlVoice (v, part, true);
     }
 }
 
 Stereo Engine::tick() noexcept
 {
-    if (untilControl_ == 0)
+    if (--untilControl_ <= 0)
     {
+        untilControl_ = kEnvelopeInterval;
         control();
-        untilControl_ = kControlInterval;
     }
-    --untilControl_;
 
-    Stereo sum;
+    Stereo pannedSum;
     for (int part = 0; part < partCount(); ++part)
     {
         PartState& s = parts_[static_cast<std::size_t> (part)];
@@ -449,9 +540,6 @@ Stereo Engine::tick() noexcept
             Voice& v = voices_[static_cast<std::size_t> (i)];
             if (! v.active)
                 continue;
-            v.ampEnv.process();
-            v.filterEnv.process();
-            v.pitchEnv.process();
             const double ampTarget = v.ampBase * v.ampEnv.value();
             v.ampSmoothed += v.ampEnv.smootherAlpha() * (ampTarget - v.ampSmoothed);
             if (v.ampEnv.idle() && v.ampSmoothed < 1.0e-6)
@@ -469,9 +557,10 @@ Stereo Engine::tick() noexcept
         constexpr double panAlpha = 1.0 / 512.0;
         s.panL += panAlpha * (s.panTargetL - s.panL);
         s.panR += panAlpha * (s.panTargetR - s.panR);
-        sum.l += 0.25 * sat (2.0 * s.panL * afterFx.l);
-        sum.r += 0.25 * sat (2.0 * s.panR * afterFx.r);
+        pannedSum.l += s.panL * afterFx.l;
+        pannedSum.r += s.panR * afterFx.r;
     }
+    const Stereo sum { 0.25 * sat (2.0 * pannedSum.l), 0.25 * sat (2.0 * pannedSum.r) };
     return output_.process ({ sat (kMasterOutputGain * sum.l), sat (kMasterOutputGain * sum.r) });
 }
 

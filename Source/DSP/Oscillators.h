@@ -257,7 +257,7 @@ public:
 
     double process (Random& random) noexcept
     {
-        constexpr double smoothAlpha = 1.0 / 512.0;
+        constexpr double smoothAlpha = 1.0 / 2048.0;
         f_ += smoothAlpha * (fTarget_ - f_);
         qHalf_ += smoothAlpha * (qHalfTarget_ - qHalf_);
         const double q = 2.0 * qHalf_;
@@ -268,12 +268,12 @@ public:
         const double h1 = sat (x1 - sat (low1_ + q * band1_));
         band1_ = sat (band1_ + f_ * h1);
 
-        const double x2 = sat (0.835 * low1_);
+        const double x2 = sat ((6881.0 / 8192.0) * low1_);
         low2_ = sat (low2_ + f_ * band2_);
         const double h2 = sat (x2 - sat (low2_ + q * band2_));
         band2_ = sat (band2_ + f_ * h2);
 
-        return sat (low2_ * 2.0 * sat (sat (4.75 * qHalf_) + 0.1797)) * 0.46875;
+        return sat (low2_ * 2.0 * sat (sat (4.75 * qHalf_) + (2949.0 / 16384.0))) * 0.46875;
     }
 
 private:
@@ -314,8 +314,8 @@ public:
     double process (double rawSawPhase) noexcept
     {
         d1_ += (1.0 / 128.0) * (d1Target_ - d1_);
-        h_ += (1.0 / 512.0) * (hTarget_ - h_);
-        amt_ += (1.0 / 512.0) * (amtTarget_ - amt_);
+        h_ += (1.0 / 2048.0) * (hTarget_ - h_);
+        amt_ += (1.0 / 2048.0) * (amtTarget_ - amt_);
 
         const double d2 = std::max (1.0, d1_ * (0.5 + h_));
         const double tap1 = 2.0 * readLerp (d1_);

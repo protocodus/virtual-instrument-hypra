@@ -119,14 +119,14 @@ inline constexpr std::array<std::uint16_t, 128> lfo2RateTable {
      10623,  10923,  11214,  11522,  11916,  12288,  12497,  12840,  13107,  13555,  13927,  14564,  14862,  16384,  21845,  32768
 };
 inline constexpr std::array<std::uint16_t, 128> portamentoRate {
-      2000,   1000,    666,    500,    400,    333,    285,    250,    222,    200,    181,    166,    153,    142,    133,    125,
-       117,    111,    105,    100,     95,     90,     86,     83,     80,     76,     74,     71,     68,     66,     64,     62,
-        60,     58,     57,     55,     54,     52,     51,     50,     48,     47,     46,     45,     44,     43,     42,     41,
-        40,     40,     39,     38,     37,     37,     36,     35,     35,     34,     33,     33,     32,     32,     31,     31,
-        30,     30,     29,     29,     28,     28,     28,     27,     27,     27,     26,     26,     25,     25,     25,     25,
-        24,     23,     23,     22,     22,     21,     21,     20,     20,     20,     19,     19,     18,     18,     18,     17,
-        17,     17,     16,     16,     16,     16,     15,     15,     15,     15,     14,     14,     14,     14,     13,     12,
-        11,     11,     10,     10,      9,      9,      8,      8,      8,      7,      6,      5,      4,      3,      2,      1
+     8192,  7742,  7316,  6914,  6534,  6174,  5835,  5514,  5211,  4924,  4653,  4397,  4156,  3927,  3711,  3507,
+     3314,  3132,  2960,  2797,  2643,  2498,  2360,  2231,  2108,  1992,  1882,  1779,  1681,  1589,  1501,  1419,
+     1341,  1267,  1197,  1132,  1069,  1011,   955,   903,   853,   806,   762,   720,   680,   643,   608,   574,
+      543,   513,   485,   458,   433,   409,   387,   365,   345,   326,   304,   296,   288,   280,   272,   264,
+      256,   248,   240,   232,   224,   216,   208,   200,   192,   184,   176,   168,   160,   152,   144,   140,
+      136,   132,   128,   124,   120,   116,   112,   108,   104,   100,    96,    92,    88,    84,    80,    76,
+       72,    68,    64,    60,    56,    54,    52,    50,    48,    46,    44,    42,    40,    38,    36,    34,
+       32,    31,    30,    29,    28,    11,    11,    10,    10,     9,     9,     8,     8,     7,     7,     6
 };
 inline constexpr std::array<std::uint16_t, 128> fadeRateTable {
      16384,  13653,  10922,   9637,   8623,   8192,   7447,   6826,   6301,   5851,   5649,   5461,   5120,   4818,   4551,   4311,
@@ -137,6 +137,16 @@ inline constexpr std::array<std::uint16_t, 128> fadeRateTable {
        168,    163,    159,    154,    148,    143,    138,    134,    129,    124,    118,    113,    109,    103,     98,     94,
         89,     84,     79,     74,     69,     66,     64,     61,     59,     56,     54,     51,     49,     46,     44,     41,
         39,     37,     36,     35,     34,     18,     16,     14,     12,     11,     10,      9,      8,      8,      7,      6
+};
+inline constexpr std::array<std::uint16_t, 65> fadeCurve {
+        0,    28,    59,    91,   125,   160,   198,   238,   280,   325,   372,   421,   474,   529,   588,   649,
+      715,   784,   856,   933,  1014,  1100,  1191,  1286,  1387,  1494,  1607,  1726,  1851,  1984,  2124,  2272,
+     2429,  2594,  2768,  2953,  3147,  3353,  3570,  3799,  4041,  4297,  4567,  4852,  5153,  5471,  5807,  6162,
+     6537,  6933,  7351,  7792,  8259,  8751,  9271,  9821, 10401, 11014, 11661, 12345, 13067, 13829, 14635, 16384,
+    16384
+};
+inline constexpr std::array<std::uint16_t, 12> envSmootherTable {
+    2048, 512, 256, 208, 144, 128, 96, 80, 74, 55, 32, 8
 };
 inline constexpr std::array<std::uint16_t, 128> panLeftTable {
      32767,  32760,  32752,  32744,  32736,  32728,  32720,  32712,  32704,  32696,  32688,  32680,  32672,  32664,  32656,  32648,
@@ -371,14 +381,21 @@ inline double resonanceBaseQHalf (double resonance) noexcept
     return lookupUnsigned (resonanceTable, resonance) / 32768.0;
 }
 
+inline double resonanceCutoffBoost (double f) noexcept
+{
+    constexpr double boostThreshold = 15165.0 / 32768.0;
+    constexpr double boostIntercept = 38038.0 / 32768.0;
+    return f <= boostThreshold ? (boostIntercept - 0.25 * f) : 1.0;
+}
+
 inline double resonanceQHalf (double resonance, double f = 5.0 / 128.0) noexcept
 {
-    return std::min (0.5, resonanceBaseQHalf (resonance) * std::max (1.0, 1.1605 - 0.25 * f));
+    return std::min (0.5, resonanceBaseQHalf (resonance) * resonanceCutoffBoost (f));
 }
 
 inline double noiseResonanceQHalf (double resonance, double f = 5.0 / 128.0) noexcept
 {
-    return resonanceBaseQHalf (resonance) * std::max (1.0, 1.1605 - 0.25 * f);
+    return resonanceBaseQHalf (resonance) * resonanceCutoffBoost (f);
 }
 
 inline double resonanceQ (double resonance, double f = 5.0 / 128.0) noexcept
@@ -434,6 +451,12 @@ inline double xmodModDepth (int value) noexcept
     return pitchEnvSemitones (value) / 48.0;
 }
 
+inline double envSmootherAlpha (int speed) noexcept
+{
+    const auto idx = static_cast<std::size_t> (std::clamp (speed, 0, 11));
+    return static_cast<double> (envSmootherTable[idx]) / 16384.0;
+}
+
 inline double envelopeStep100Hz (int value) noexcept
 {
     const auto idx = static_cast<std::size_t> (std::clamp (value, 0, 127));
@@ -466,11 +489,30 @@ inline double fadeSeconds (int value) noexcept
     return 1.0 / (fadeStep100Hz (value) * kEnvelopeRate);
 }
 
+inline double fadeLevelFromPhase (int phase) noexcept
+{
+    const int p = std::clamp (phase, 0, 16384);
+    if (p >= 16384)
+        return 1.0;
+    const auto idx = static_cast<std::size_t> (p >> 8);
+    const double frac = static_cast<double> (p & 255) / 256.0;
+    const double a = static_cast<double> (fadeCurve[idx]);
+    const double b = static_cast<double> (fadeCurve[idx + 1]);
+    return (a + (b - a) * frac) / 16384.0;
+}
+
 inline double fadeLevel (double age, double seconds) noexcept
 {
     if (seconds <= 0.0 || age >= seconds)
         return 1.0;
-    return std::pow (10.0, -37.0 / 20.0 * (1.0 - std::max (age, 0.0) / seconds));
+    if (age <= 0.0)
+        return 0.0;
+    const double pos = (age / seconds) * 64.0;
+    const auto idx = std::min<std::size_t> (static_cast<std::size_t> (pos), 63);
+    const double frac = pos - static_cast<double> (idx);
+    const double a = static_cast<double> (fadeCurve[idx]);
+    const double b = static_cast<double> (fadeCurve[idx + 1]);
+    return (a + (b - a) * frac) / 16384.0;
 }
 
 inline double lfoHz (int value) noexcept
@@ -508,20 +550,18 @@ inline double noiseCoefficient (double hz, double cutoff) noexcept
                        1.0 / 1024.0, 1.0);
 }
 
-inline constexpr std::array<double, 9> portamentoTable {
-    0.0, 0.027, 0.056, 0.150, 0.316, 0.574, 1.084, 2.425, 8.95
-};
+inline double portamentoStep100Hz (int value) noexcept
+{
+    const auto idx = static_cast<std::size_t> (std::clamp (value, 0, 127));
+    return static_cast<double> (portamentoRate[idx]) / 8192.0;
+}
 
 inline double portamentoSeconds (int value) noexcept
 {
-    const double a = std::clamp (value, 0, 127);
-    const std::size_t i = std::min<std::size_t> (static_cast<std::size_t> (a / 16.0), 7);
-    const double lo = 16.0 * static_cast<double> (i);
-    const double hi = i == 7 ? 127.0 : lo + 16.0;
-    const double u = (a - lo) / (hi - lo);
-    if (i == 0)
-        return portamentoTable[1] * u;
-    return portamentoTable[i] * std::pow (portamentoTable[i + 1] / portamentoTable[i], u);
+    const int v = std::clamp (value, 0, 127);
+    if (v == 0)
+        return 0.0;
+    return 1.0 / (portamentoStep100Hz (v) * kEnvelopeRate);
 }
 
 inline double delaySamples (DelayType type, int time) noexcept

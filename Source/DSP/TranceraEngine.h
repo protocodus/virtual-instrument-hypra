@@ -51,8 +51,11 @@ private:
         bool active { false }, held { false }, sustained { false };
         int note { 60 };
         std::uint64_t order { 0 };
-        double velocity { 1.0 }, pitch { 60.0 }, target { 60.0 }, detune { 0.0 }, glideStep { 1.0e9 };
-        double age { 0.0 };
+        double velocity { 1.0 }, pitch { 60.0 }, target { 60.0 }, detune { 0.0 };
+        double portaDelta { 0.0 };
+        int portaRemain { 0 };
+        int fadePhase { 16384 };
+        int qSnapTicks { 0 };
         double ampBase { 0.0 }, ampSmoothed { 0.0 };
     };
 
@@ -68,11 +71,11 @@ private:
         std::array<HeldNote, 128> keys {};
         int keyCount { 0 };
         double lfoPhase { 0.0 }, lfoHeld { 0.0 }, lfo1 { 0.0 }, lfo2Phase { 0.0 }, lfo2 { 0.0 };
-        double lfoStep { 0.0 }, lfo2Step { 0.0 }, fade { 0.0 }, glideSeconds { 0.0 };
+        double lfoStep { 0.0 }, lfo2Step { 0.0 };
         double lastPitch { 60.0 };
         double panL { mapping::panCenterGain }, panR { mapping::panCenterGain };
         double panTargetL { mapping::panCenterGain }, panTargetR { mapping::panCenterGain };
-        bool hasPlayed { false };
+        bool hasPlayed { false }, lfoEdge { false };
     };
 
     struct Span { int first, count; };
@@ -84,7 +87,7 @@ private:
     void trigger (Voice& voice, int part, int note, int velocity, bool retrigger, bool mayGlide) noexcept;
     void release (Voice& voice) noexcept;
     void control() noexcept;
-    void controlVoice (Voice& voice, int part) noexcept;
+    void controlVoice (Voice& voice, int part, bool advanceTick) noexcept;
     Stereo tick() noexcept;
 
     std::array<Voice, maxVoices> voices_ {};
@@ -96,7 +99,7 @@ private:
     std::uint32_t seed_ { 8000 };
     std::uint64_t order_ { 0 };
     double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, tune_ { 0.0 };
-    int partDetune_ { 0 }, untilControl_ { 0 };
+    int partDetune_ { 0 }, untilControl_ { kEnvelopeInterval };
     bool sustain_ { false };
 };
 } // namespace trancera

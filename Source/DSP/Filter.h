@@ -20,11 +20,12 @@ public:
     }
 
     void configure (double coefficient, double resonance, FilterType type, bool steep,
-                    double fSmoothAlpha = 1.0 / 512.0) noexcept
+                    double fSmoothAlpha = 1.0 / 512.0, double qSmoothAlpha = 1.0 / 512.0) noexcept
     {
         type_ = type;
         steep_ = steep;
         fSmoothAlpha_ = fSmoothAlpha;
+        qSmoothAlpha_ = qSmoothAlpha;
         fTarget_ = std::clamp (coefficient, 1.0 / 1024.0, 1.0);
         qHalfTarget_ = mapping::resonanceQHalf (resonance, fTarget_);
         comp12_ = steep ? 1.0 : mapping::resonance12AmpComp (resonance);
@@ -38,9 +39,8 @@ public:
 
     double process (double x) noexcept
     {
-        constexpr double smoothAlpha = 1.0 / 512.0;
         f_ += fSmoothAlpha_ * (fTarget_ - f_);
-        qHalf_ += smoothAlpha * (qHalfTarget_ - qHalf_);
+        qHalf_ += qSmoothAlpha_ * (qHalfTarget_ - qHalf_);
         const double q = 2.0 * qHalf_;
 
         low_[0] = sat (low_[0] + f_ * band_[0]);
@@ -64,6 +64,6 @@ private:
     FilterType type_ { FilterType::LowPass };
     bool steep_ { true }, fresh_ { true };
     double f_ { 5.0 / 128.0 }, fTarget_ { 5.0 / 128.0 }, fSmoothAlpha_ { 1.0 / 512.0 };
-    double qHalf_ { 0.5 }, qHalfTarget_ { 0.5 }, comp12_ { 1.0 };
+    double qHalf_ { 0.5 }, qHalfTarget_ { 0.5 }, qSmoothAlpha_ { 1.0 / 512.0 }, comp12_ { 1.0 };
 };
 } // namespace trancera

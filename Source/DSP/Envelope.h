@@ -1,4 +1,4 @@
-// 100 Hz stepped exponential envelope generator with per-stage smoother rates.
+// 100 Hz stepped exponential envelope generator with 12-level smoother control.
 #pragma once
 
 #include "Core.h"
@@ -16,32 +16,24 @@ public:
         attackVal_ = std::clamp (attack, 0, 127);
         decayVal_ = std::clamp (decay, 0, 127);
         releaseVal_ = std::clamp (release, 0, 127);
-        attackStep_ = mapping::envelopeStep100Hz (attackVal_);
-        decayStep_ = mapping::envelopeStep100Hz (decayVal_);
-        releaseStep_ = mapping::envelopeStep100Hz (releaseVal_);
+        attackRate_ = mapping::envRateTable[static_cast<std::size_t> (attackVal_)];
+        decayRate_ = mapping::envRateTable[static_cast<std::size_t> (decayVal_)];
+        releaseRate_ = mapping::envRateTable[static_cast<std::size_t> (releaseVal_)];
         sustain_ = std::clamp (sustain, 0.0, 1.0);
     }
 
-    void trigger() noexcept
+    void trigger (bool lfoActive = false, bool lfoEdge = false, bool useEnvSpeed = true) noexcept
     {
         stage_ = Stage::Attack;
         tickCount_ = kEnvelopeInterval;
-        attackHoldSmoother_ = true;
-        value_ += (attackTarget - value_) * attackStep_;
-        if (value_ >= 1.0)
-        {
-            value_ = 1.0;
-            stage_ = Stage::Decay;
-        }
+        nextSpeed_ = 11;
+        tick100Hz (lfoActive, lfoEdge, useEnvSpeed);
     }
 
     void release() noexcept
     {
         if (stage_ != Stage::Idle)
-        {
-            attackHoldSmoother_ = false;
             stage_ = Stage::Release;
-        }
     }
 
     void reset() noexcept
@@ -49,39 +41,19 @@ public:
         stage_ = Stage::Idle;
         value_ = 0.0;
         tickCount_ = kEnvelopeInterval;
-        attackHoldSmoother_ = false;
+        nextSpeed_ = 11;
+        smootherAlpha_ = mapping::envSmootherAlpha (11);
     }
 
     bool idle() const noexcept { return stage_ == Stage::Idle; }
     double value() const noexcept { return value_; }
 
-    // 88.2 kHz one-pole coefficient matching each segment's transition speed.
-    double smootherAlpha() const noexcept
-    {
-        if (attackHoldSmoother_ || stage_ == Stage::Attack)
-            return attackVal_ < 30 ? (1.0 / 8.0) : (1.0 / 2048.0);
-        if (stage_ == Stage::Decay)
-            return decayVal_ < 10 ? (1.0 / 128.0) : decayVal_ < 30 ? (1.0 / 512.0) : (1.0 / 2048.0);
-        if (stage_ == Stage::Release)
-            return releaseVal_ < 10 ? (1.0 / 128.0) : releaseVal_ < 30 ? (1.0 / 512.0) : (1.0 / 2048.0);
-        return 1.0 / 2048.0;
-    }
-
-    double filterSmootherAlpha() const noexcept
-    {
-        if (attackHoldSmoother_ || stage_ == Stage::Attack)
-            return attackVal_ == 0 ? (1.0 / 8.0) : attackVal_ < 30 ? (1.0 / 512.0) : (1.0 / 2048.0);
-        if (stage_ == Stage::Decay)
-            return decayVal_ == 0 ? (1.0 / 8.0) : decayVal_ < 10 ? (1.0 / 128.0) : decayVal_ < 30 ? (1.0 / 512.0) : (1.0 / 2048.0);
-        if (stage_ == Stage::Release)
-            return releaseVal_ == 0 ? (1.0 / 8.0) : releaseVal_ < 10 ? (1.0 / 128.0) : releaseVal_ < 30 ? (1.0 / 512.0) : (1.0 / 2048.0);
-        return 1.0 / 512.0;
-    }
+    // 88.2 kHz one-pole coefficient matching the active segment and modulation speed.
+    double smootherAlpha() const noexcept { return smootherAlpha_; }
+    double filterSmootherAlpha() const noexcept { return smootherAlpha_; }
 
     double process() noexcept
     {
-        if (stage_ == Stage::Idle)
-            return 0.0;
         if (--tickCount_ <= 0)
         {
             tickCount_ = kEnvelopeInterval;
@@ -90,43 +62,180 @@ public:
         return value_;
     }
 
-    void tick100Hz() noexcept
+    void tick100Hz (bool lfoActive = false, bool lfoEdge = false, bool useEnvSpeed = true) noexcept
     {
-        attackHoldSmoother_ = false;
+        constexpr double kMinStep = 1.0 / 16384.0;
+        int speed = nextSpeed_;
+        if (lfoActive)
+        {
+            if (lfoEdge)
+            {
+                if (speed > 2 && speed <= 11)
+                    speed = 2;
+            }
+            else if (speed == 11)
+            {
+                speed = 10;
+            }
+        }
+
+        int envSpeed = speed;
         switch (stage_)
         {
             case Stage::Attack:
-                value_ += (attackTarget - value_) * attackStep_;
-                if (value_ >= 1.0)
+                if (attackRate_ > 4864)
                 {
                     value_ = 1.0;
                     stage_ = Stage::Decay;
+                    envSpeed = fastSpeedForRate (attackRate_);
+                }
+                else
+                {
+                    const double step = std::max (kMinStep, (attackTarget - value_) * (static_cast<double> (attackRate_) / 8192.0));
+                    value_ += step;
+                    if (value_ >= 1.0)
+                    {
+                        value_ = 1.0;
+                        stage_ = Stage::Decay;
+                    }
+                    if (attackRate_ > 1536)
+                        envSpeed = 10;
                 }
                 break;
+
             case Stage::Decay:
-                value_ += (sustain_ - value_) * decayStep_;
+                if (value_ > sustain_)
+                {
+                    if (decayRate_ > 4864)
+                    {
+                        value_ = sustain_;
+                        stage_ = Stage::Sustain;
+                        envSpeed = fastSpeedForRate (decayRate_);
+                    }
+                    else
+                    {
+                        const double step = std::max (kMinStep, (value_ - sustain_) * (static_cast<double> (decayRate_) / 8192.0));
+                        value_ = std::max (sustain_, value_ - step);
+                        if (value_ <= sustain_)
+                        {
+                            value_ = sustain_;
+                            stage_ = Stage::Sustain;
+                        }
+                        if (decayRate_ > 1536)
+                            envSpeed = 10;
+                    }
+                }
+                else if (value_ < sustain_)
+                {
+                    if (decayRate_ > 4864)
+                    {
+                        value_ = sustain_;
+                        stage_ = Stage::Sustain;
+                        envSpeed = fastSpeedForRate (decayRate_);
+                    }
+                    else
+                    {
+                        const double step = std::max (kMinStep, (sustain_ - value_) * (static_cast<double> (decayRate_) / 8192.0));
+                        value_ = std::min (sustain_, value_ + step);
+                        if (value_ >= sustain_)
+                        {
+                            value_ = sustain_;
+                            stage_ = Stage::Sustain;
+                        }
+                        if (decayRate_ > 1536)
+                            envSpeed = 10;
+                    }
+                }
+                else
+                {
+                    stage_ = Stage::Sustain;
+                }
                 break;
+
+            case Stage::Sustain:
+                value_ = sustain_;
+                break;
+
             case Stage::Release:
-                value_ -= value_ * releaseStep_;
-                if (value_ < 1.0e-5)
+                if (releaseRate_ > 4864)
                 {
                     value_ = 0.0;
                     stage_ = Stage::Idle;
+                    envSpeed = fastSpeedForRate (releaseRate_);
+                }
+                else
+                {
+                    const double step = std::max (kMinStep, value_ * (static_cast<double> (releaseRate_) / 8192.0));
+                    if (value_ <= step)
+                    {
+                        value_ = 0.0;
+                        stage_ = Stage::Idle;
+                    }
+                    else
+                    {
+                        value_ -= step;
+                    }
+                    if (releaseRate_ > 1536)
+                        envSpeed = 10;
                 }
                 break;
+
             case Stage::Idle:
+                value_ = 0.0;
                 break;
+        }
+
+        if (useEnvSpeed && envSpeed < speed && speed < 12)
+            speed = envSpeed;
+
+        if (speed == 10)
+        {
+            smootherAlpha_ = mapping::envSmootherAlpha (10);
+            nextSpeed_ = 11;
+        }
+        else if (stage_ == Stage::Attack)
+        {
+            if (speed < 12)
+            {
+                smootherAlpha_ = mapping::envSmootherAlpha (speed);
+                nextSpeed_ = (speed == 0 || speed == 11) ? 11 : 13;
+            }
+            else
+            {
+                nextSpeed_ = (speed == 13) ? 12 : 11;
+            }
+        }
+        else
+        {
+            if (speed < 12)
+                smootherAlpha_ = mapping::envSmootherAlpha (speed);
+            nextSpeed_ = 11;
         }
     }
 
 private:
-    enum class Stage { Idle, Attack, Decay, Release };
+    static constexpr int fastSpeedForRate (std::uint16_t rate) noexcept
+    {
+        if (rate >= 8192) return 0;
+        if (rate > 7680)  return 1;
+        if (rate > 7168)  return 2;
+        if (rate > 6656)  return 3;
+        if (rate > 6400)  return 4;
+        if (rate > 6144)  return 5;
+        if (rate > 5632)  return 6;
+        if (rate > 5376)  return 7;
+        if (rate > 5120)  return 8;
+        return 9;
+    }
+
+    enum class Stage { Idle, Attack, Decay, Sustain, Release };
 
     Stage stage_ { Stage::Idle };
     int attackVal_ { 0 }, decayVal_ { 64 }, releaseVal_ { 5 };
+    std::uint16_t attackRate_ { 8192 }, decayRate_ { 256 }, releaseRate_ { 6174 };
     int tickCount_ { kEnvelopeInterval };
-    double value_ { 0.0 };
-    double attackStep_ { 1.0 }, decayStep_ { 1.0 }, releaseStep_ { 1.0 }, sustain_ { 1.0 };
-    bool attackHoldSmoother_ { false };
+    int nextSpeed_ { 11 };
+    double value_ { 0.0 }, sustain_ { 1.0 };
+    double smootherAlpha_ { mapping::envSmootherAlpha (11) };
 };
 } // namespace trancera

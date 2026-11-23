@@ -495,7 +495,7 @@ void timing()
     near (mapping::filterLfoSemitones (40), 27.44, 1e-6, "filter LFO depth is half the envelope's");
     near (mapping::keyFollow (-64), -1.0, 1e-9, "key follow -64 is -100 %");
     near (mapping::keyFollow (32), 1.0, 1e-9, "key follow +32 is 100 %");
-    near (mapping::portamentoSeconds (64), 0.316, 1e-3, "portamento 64");
+    near (mapping::portamentoSeconds (64), 0.320, 1e-6, "portamento 64");
     near (mapping::portamentoSeconds (0), 0.0, 1e-9, "portamento 0 jumps");
 
     // Attack steps at 100 Hz toward 1.25 and clamps at 1.0.
@@ -532,7 +532,7 @@ void timing()
     e.render (l.data(), r.data(), static_cast<int> (l.size()));
     const std::vector<double> x (l.begin(), l.end());
     const auto at = [&] (double t) { return static_cast<std::size_t> (t * fs); };
-    const double mid = zeroCrossingHz (x, at (0.158 - 0.006), at (0.158 + 0.006), fs);
+    const double mid = zeroCrossingHz (x, at (0.165 - 0.005), at (0.165 + 0.005), fs);
     near (12.0 * std::log2 (mid / 261.6256), 0.0, 0.35, "glide passes C4 halfway");
     const double end = zeroCrossingHz (x, at (0.4), at (0.6), fs);
     near (12.0 * std::log2 (end / 523.2511), 0.0, 0.02, "glide lands on C5");
@@ -552,8 +552,8 @@ void modulation()
 
     near (mapping::fadeSeconds (64), 16384.0 / (321.0 * 100.0), 1e-4, "FADE 64 matches table rate");
     near (mapping::fadeSeconds (0), 0.0, 1e-12, "FADE 0 is off");
-    near (db (mapping::fadeLevel (0.0, 1.0)), -37.0, 1e-6, "fade starts 37 dB down");
-    near (db (mapping::fadeLevel (0.5, 1.0)), -18.5, 1e-6, "fade rises in decibels");
+    near (mapping::fadeLevel (0.0, 1.0), 0.0, 1e-12, "fade starts at zero");
+    near (mapping::fadeLevel (0.5, 1.0), 2429.0 / 16384.0, 1e-9, "fade midpoint follows curve table");
     near (mapping::fadeLevel (1.2, 1.0), 1.0, 1e-12, "fade stops at full");
 
     near (mapping::lfo2Hz (0), 0.78125, 1e-5, "LFO 2 rate 0");
@@ -715,13 +715,56 @@ void envelopeSmoother()
     env.configure (0, 64, 0.5, 5);
     env.trigger();
     near (env.value(), 1.0, 1e-9, "attack 0 hits full on trigger");
-    near (env.smootherAlpha(), 1.0 / 8.0, 1e-9, "attack < 30 uses fast 1/8 initial smoother");
+    near (env.smootherAlpha(), 1.0 / 8.0, 1e-9, "attack 0 uses fast 1/8 initial smoother");
     for (int i = 0; i < kEnvelopeInterval - 1; ++i)
         near (env.process(), 1.0, 1e-9, "attack 0 holds 10 ms before decay ticks");
     check (env.process() < 0.99, "decay starts on the 100 Hz tick");
     near (env.smootherAlpha(), 1.0 / 2048.0, 1e-9, "decay >= 30 switches smoother to 1/2048");
 
-    // Verify fast release drops smoothly into the 1/2048 tail once envelope reaches idle.
+    // Verify all fast attack speeds 0..9, intermediate speed 10, and slow speed 11.
+    constexpr double fastAlphas[10] {
+        2048.0 / 16384.0, 512.0 / 16384.0, 256.0 / 16384.0, 208.0 / 16384.0, 144.0 / 16384.0,
+        128.0 / 16384.0,  96.0 / 16384.0,  80.0 / 16384.0,  74.0 / 16384.0,  55.0 / 16384.0
+    };
+    for (int atk = 0; atk < 10; ++atk)
+    {
+        env.reset();
+        env.configure (atk, 64, 0.5, 64);
+        env.trigger();
+        near (env.value(), 1.0, 1e-9, "fast attack jumps to peak: " + std::to_string (atk));
+        near (env.smootherAlpha(), fastAlphas[atk], 1e-12, "fast attack smoother level " + std::to_string (atk));
+    }
+    env.reset();
+    env.configure (15, 64, 0.5, 64);
+    env.trigger();
+    near (env.smootherAlpha(), 1.0 / 512.0, 1e-12, "attack 10..29 uses speed 10 (1/512)");
+    env.reset();
+    env.configure (32, 64, 0.5, 64);
+    env.trigger();
+    near (env.smootherAlpha(), 1.0 / 2048.0, 1e-12, "attack >= 30 uses speed 11 (1/2048)");
+    env.reset();
+    env.trigger (true, false, true);
+    near (env.smootherAlpha(), 1.0 / 512.0, 1e-12, "active LFO upgrades speed 11 to 1/512");
+    env.reset();
+    env.trigger (true, true, true);
+    near (env.smootherAlpha(), 1.0 / 64.0, 1e-12, "LFO edge upgrades attack smoother to 1/64");
+    env.tick100Hz (true, false, true);
+    near (env.smootherAlpha(), 1.0 / 64.0, 1e-12, "attack holds LFO edge speed on tick +1");
+    env.tick100Hz (true, false, true);
+    near (env.smootherAlpha(), 1.0 / 64.0, 1e-12, "attack holds LFO edge speed on tick +2");
+    env.tick100Hz (true, false, true);
+    near (env.smootherAlpha(), 1.0 / 512.0, 1e-12, "attack returns to LFO speed after two hold ticks");
+
+    env.reset();
+    env.configure (0, 64, 0.5, 64);
+    env.trigger (false, false, false);
+    near (env.smootherAlpha(), 1.0 / 2048.0, 1e-12, "ignoring env speed keeps 1/2048 baseline");
+    env.reset();
+    env.trigger (true, false, false);
+    near (env.smootherAlpha(), 1.0 / 512.0, 1e-12, "ignoring env speed still upgrades on active LFO");
+
+    // Fast release steps straight to idle through speed 5 (1/128), then settles to 1/2048.
+    env.reset();
     env.configure (0, 0, 1.0, 5);
     env.trigger();
     for (int i = 0; i < 2000; ++i)
@@ -730,7 +773,10 @@ void envelopeSmoother()
     for (int i = 0; i < 8820 && ! env.idle(); ++i)
         env.process();
     check (env.idle(), "short release reaches idle within 100 ms");
-    near (env.smootherAlpha(), 1.0 / 2048.0, 1e-9, "idle tail decays through 1/2048 smoother");
+    near (env.smootherAlpha(), 1.0 / 128.0, 1e-12, "release 5 enters idle at speed 5 (1/128)");
+    for (int i = 0; i < kEnvelopeInterval; ++i)
+        env.process();
+    near (env.smootherAlpha(), 1.0 / 2048.0, 1e-12, "idle tail settles to 1/2048 on next tick");
 }
 
 void toneSaturation()
@@ -771,6 +817,156 @@ void osc2AndSync()
     near (db (tone (o2Tri, 110.0) / tone (o1Tri, 110.0)), 0.22, 0.3, "OSC 2 Triangle is +0.22 dB over OSC 1 Triangle");
     check (tone (sSaw, 110.0) > 1e-3 && tone (sSaw, 330.0) > 1e-3, "Sync Saw tracks master fundamental and overtones");
     check (tone (sTri, 110.0) > 1e-3 && tone (sPulse, 110.0) > 1e-3, "Sync Tri and Pulse track master pitch");
+}
+
+void controlAccuracy()
+{
+    // Exact portamento timing law and interval invariance.
+    near (mapping::portamentoSeconds (0), 0.0, 1e-12, "portamento 0 is instant");
+    near (mapping::portamentoSeconds (16), 8192.0 / (3314.0 * 100.0), 1e-9, "portamento 16");
+    near (mapping::portamentoSeconds (64), 0.320, 1e-9, "portamento 64");
+    near (mapping::portamentoSeconds (96), 8192.0 / (72.0 * 100.0), 1e-9, "portamento 96");
+
+    const auto glideEndCents = [] (int targetNote)
+    {
+        Patch p;
+        p.osc1.wave = Wave1::Triangle;
+        p.balance = -64;
+        p.mono = p.portamento = true;
+        p.portamentoTime = 64;
+        p.amp.sustain = 127;
+        Engine e;
+        e.prepare (fs);
+        e.setPatch (Part::Upper, p);
+        std::vector<float> l (static_cast<std::size_t> (0.6 * fs)), r (l.size());
+        e.noteOn (48, 100);
+        e.render (l.data(), r.data(), 8820);
+        e.noteOn (targetNote, 100);
+        e.render (l.data(), r.data(), static_cast<int> (l.size()));
+        const std::vector<double> x (l.begin(), l.end());
+        const double hz = zeroCrossingHz (x, static_cast<std::size_t> (0.34 * fs), static_cast<std::size_t> (0.55 * fs), fs);
+        const double expectedHz = 440.0 * std::exp2 ((targetNote - 69) / 12.0);
+        return 1200.0 * std::log2 (hz / expectedHz);
+    };
+    near (glideEndCents (60), 0.0, 3.0, "12-semitone glide finishes within constant time");
+    near (glideEndCents (72), 0.0, 3.0, "24-semitone glide finishes within same constant time");
+
+    // Monotonic LFO fade curve.
+    near (mapping::fadeLevelFromPhase (0), 0.0, 1e-12, "fade curve starts at 0");
+    near (mapping::fadeLevelFromPhase (8192), 2429.0 / 16384.0, 1e-12, "fade curve midpoint");
+    near (mapping::fadeLevelFromPhase (16128), 1.0, 1e-12, "fade curve reaches 1 at step 63");
+    near (mapping::fadeLevelFromPhase (16384), 1.0, 1e-12, "fade curve clamps at 1");
+    bool fadeMono = true;
+    for (int ph = 1; ph <= 16384; ph += 128)
+        fadeMono = fadeMono && (mapping::fadeLevelFromPhase (ph) >= mapping::fadeLevelFromPhase (ph - 1));
+    check (fadeMono, "fade curve is monotonically non-decreasing");
+
+    // Sample & Hold updates twice per LFO 1 cycle (~10 steps/s near 5 Hz).
+    {
+        Patch p;
+        p.osc1.wave = Wave1::Triangle;
+        p.balance = -64;
+        p.lfo1.wave = LfoWave::SampleHold;
+        p.lfo1.rate = 77;
+        p.lfo1.fade = 0;
+        p.pitchLfo = 32;
+        p.amp.sustain = 127;
+        Engine e;
+        e.prepare (fs);
+        e.setPatch (Part::Upper, p);
+        std::vector<float> l (static_cast<std::size_t> (fs)), r (l.size());
+        e.noteOn (60, 100);
+        e.render (l.data(), r.data(), static_cast<int> (l.size()));
+        const std::vector<double> x (l.begin(), l.end());
+        int changes = 0;
+        double prevHz = 0.0;
+        for (int k = 1; k < 19; ++k)
+        {
+            const std::size_t a = static_cast<std::size_t> ((0.05 * k + 0.005) * fs);
+            const std::size_t b = static_cast<std::size_t> ((0.05 * k + 0.045) * fs);
+            const double hz = zeroCrossingHz (x, a, b, fs);
+            if (prevHz > 0.0 && std::abs (hz - prevHz) > 4.0)
+                ++changes;
+            prevHz = hz;
+        }
+        check (changes >= 6, "SampleHold updates at twice LFO rate");
+    }
+
+    // Bipolar OSC 1 Square PWM swings duty down to symmetric 50% on negative LFO half-cycle.
+    {
+        Patch p;
+        p.osc1 = { Wave1::Square, 64, 64 };
+        p.balance = -64;
+        p.filter.cutoff = 127;
+        p.lfo1.wave = LfoWave::Square;
+        p.lfo1.rate = 48;
+        p.lfo1.fade = 0;
+        p.amp.sustain = 127;
+        Engine e;
+        e.prepare (fs);
+        e.setPatch (Part::Upper, p);
+        std::vector<float> l (static_cast<std::size_t> (fs)), r (l.size());
+        e.noteOn (60, 100);
+        e.render (l.data(), r.data(), static_cast<int> (l.size()));
+        const double f0 = 261.6256;
+        std::vector<double> firstHalf (l.begin() + static_cast<long> (0.25 * fs),
+                                       l.begin() + static_cast<long> (0.40 * fs));
+        std::vector<double> secondHalf (l.begin() + static_cast<long> (0.70 * fs),
+                                        l.begin() + static_cast<long> (0.85 * fs));
+        const double r1 = tone (firstHalf, 2.0 * f0) / tone (firstHalf, f0);
+        const double r2 = tone (secondHalf, 2.0 * f0) / tone (secondHalf, f0);
+        check (std::max (r1, r2) > 0.45 && std::min (r1, r2) < 0.05,
+               "bipolar Square PWM visits both extreme duty and symmetric 50%");
+    }
+
+    // Filter smoother upgrades from 1/2048 to 1/512 when LFO 2 depth is non-zero (even at modWheel = 0).
+    {
+        const auto decayEnergy = [] (int lfo2FilterDepth)
+        {
+            Patch p;
+            p.osc1 = { Wave1::Saw, 32, 0 };
+            p.balance = -64;
+            p.filter.cutoff = 59;
+            p.filter.env = { 0, 30, 0, 10 };
+            p.filter.envDepth = 40;
+            p.lfo2.filter = lfo2FilterDepth;
+            p.amp = { 0, 64, 127, 10 };
+            Engine e;
+            e.prepare (fs);
+            e.setPatch (Part::Upper, p);
+            std::vector<float> l (static_cast<std::size_t> (0.06 * fs)), r (l.size());
+            e.noteOn (60, 64);
+            e.render (l.data(), r.data(), static_cast<int> (l.size()));
+            double sumSq = 0.0;
+            for (std::size_t i = static_cast<std::size_t> (0.015 * fs); i < static_cast<std::size_t> (0.045 * fs); ++i)
+            {
+                const double hp = l[i] - l[i - 1];
+                sumSq += hp * hp;
+            }
+            return sumSq;
+        };
+        check (decayEnergy (19) < decayEnergy (0) * 0.9,
+               "filter LFO assignment speeds up filter smoother even with modWheel at 0");
+    }
+
+    // Dual mode sums Upper and Lower parts cleanly before bus saturation.
+    {
+        Patch p;
+        p.osc1 = { Wave1::Saw, 32, 0 };
+        p.balance = -64;
+        Engine e;
+        e.prepare (fs);
+        e.setMode (KeyMode::Dual);
+        e.setPatch (Part::Upper, p);
+        e.setPatch (Part::Lower, p);
+        e.noteOn (60, 100);
+        std::vector<float> l (4096), r (4096);
+        e.render (l.data(), r.data(), 4096);
+        float peak = 0.0f;
+        for (std::size_t i = 0; i < l.size(); ++i)
+            peak = std::max ({ peak, std::abs (l[i]), std::abs (r[i]) });
+        check (peak > 0.01f && peak < 1.5f, "dual mode sums cleanly and stays bounded");
+    }
 }
 
 // The flat control list every front end uses: unique ids, every value of every
@@ -834,7 +1030,7 @@ int main (int argc, char** argv)
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
-        { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync } };
+        { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();
