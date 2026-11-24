@@ -25,6 +25,8 @@
 // Small signal, ideal op-amps, high-impedance load. Gains are normalised to
 // unity at 1 kHz on the rack node. AnalogColor adds the DAC's truncation and
 // ladder error and the op-amp's soft limit (on by default); no noise is added.
+// setDacEnabled(false) bypasses the entire DAC + analogue circuit cleanly at
+// constant Downsampler8 latency (direct 24-bit DSP output, like JE-8086).
 #pragma once
 
 #include "Core.h"
@@ -75,6 +77,34 @@ public:
     }
     const AnalogColor& color() const noexcept { return color_; }
 
+    // Enables or bypasses the full DAC + analogue circuit while keeping host latency constant.
+    void setDacEnabled (bool on) noexcept
+    {
+        dacEnabled_ = on;
+        dacTarget_ = on ? 256 : 0;
+        if (! hasRendered_)
+        {
+            dacMix_ = dacTarget_;
+            dacWarmup_ = 0;
+            analogWarm_ = on;
+            return;
+        }
+        if (on)
+        {
+            if (dacMix_ == 0 && ! analogWarm_ && dacWarmup_ == 0)
+            {
+                resetAnalogState();
+                dacWarmup_ = kAnalogWarmupSamples;
+            }
+        }
+        else if (dacMix_ == 0)
+        {
+            dacWarmup_ = 0;
+            analogWarm_ = false;
+        }
+    }
+    [[nodiscard]] bool dacEnabled() const noexcept { return dacEnabled_; }
+
     void prepare (OutputNode node) noexcept
     {
         node_ = node;
@@ -101,59 +131,82 @@ public:
 
     void reset() noexcept
     {
-        down_.reset();
-        buffer_.reset();
-        jack_.reset();
-        panel_.reset();
-        z_.fill (Double2::zero());
-        couplingX_.fill (Double2::zero());
-        couplingY_.fill (Double2::zero());
+        resetAnalogState();
+        digitalDelay_.fill (Double2::zero());
+        digitalDelayWrite_ = 0;
         colorMix_ = colorTarget_;
+        dacMix_ = dacTarget_;
+        dacWarmup_ = 0;
+        analogWarm_ = dacEnabled_;
         hasRendered_ = false;
     }
 
-    // One 88.2 kHz DAC word in, the jack voltage out at 88.2 kHz.
+    // One 88.2 kHz DAC word in, the jack voltage (or delayed digital word) out at 88.2 kHz.
     Stereo process (Stereo word) noexcept
     {
         hasRendered_ = true;
-        if (colorMix_ != colorTarget_)
+        if (node_ == OutputNode::Digital)
         {
-            colorMix_ += colorTarget_ > colorMix_ ? 1 : -1;
-            const double a = static_cast<double> (colorMix_) / 256.0;
-            const double cleanL = convertClean (word.l), colorL = convertColored (word.l, ladderL_);
-            const double cleanR = convertClean (word.r), colorR = convertColored (word.r, ladderR_);
-            const Double2 v = Double2::make (cleanL + a * (colorL - cleanL), cleanR + a * (colorR - cleanR));
-            if (node_ == OutputNode::Digital)
-                return { v[0], v[1] };
-            return node_ == OutputNode::KeyboardAsPrinted ? runAnalogSampleFade<true> (v, a)
-                                                          : runAnalogSampleFade<false> (v, a);
+            if (colorMix_ != colorTarget_)
+            {
+                colorMix_ += colorTarget_ > colorMix_ ? 1 : -1;
+                const double a = static_cast<double> (colorMix_) / 256.0;
+                const double cleanL = convertClean (word.l), colorL = convertColored (word.l, ladderL_);
+                const double cleanR = convertClean (word.r), colorR = convertColored (word.r, ladderR_);
+                return { cleanL + a * (colorL - cleanL), cleanR + a * (colorR - cleanR) };
+            }
+            return { convert (word.l, ladderL_), convert (word.r, ladderR_) };
         }
-        return finishAnalog (Double2::make (convert (word.l, ladderL_), convert (word.r, ladderR_)));
+        return processDacSample (Double2::make (word.l, word.r), [&] () noexcept {
+            if (colorMix_ != colorTarget_)
+            {
+                colorMix_ += colorTarget_ > colorMix_ ? 1 : -1;
+                const double a = static_cast<double> (colorMix_) / 256.0;
+                const double cleanL = convertClean (word.l), colorL = convertColored (word.l, ladderL_);
+                const double cleanR = convertClean (word.r), colorR = convertColored (word.r, ladderR_);
+                const Double2 v = Double2::make (cleanL + a * (colorL - cleanL), cleanR + a * (colorR - cleanR));
+                return node_ == OutputNode::KeyboardAsPrinted ? runAnalogSampleFade<true> (v, a)
+                                                              : runAnalogSampleFade<false> (v, a);
+            }
+            return finishAnalog (Double2::make (convert (word.l, ladderL_), convert (word.r, ladderR_)));
+        });
     }
 
     Stereo processQ23 (StereoQ23 word) noexcept
     {
         hasRendered_ = true;
-        if (colorMix_ != colorTarget_)
+        if (node_ == OutputNode::Digital)
         {
-            colorMix_ += colorTarget_ > colorMix_ ? 1 : -1;
-            const double a = static_cast<double> (colorMix_) / 256.0;
-            const double cleanL = convertCleanQ23 (word.l), colorL = convertColoredQ23 (word.l, ladderL_);
-            const double cleanR = convertCleanQ23 (word.r), colorR = convertColoredQ23 (word.r, ladderR_);
-            const Double2 v = Double2::make (cleanL + a * (colorL - cleanL), cleanR + a * (colorR - cleanR));
-            if (node_ == OutputNode::Digital)
-                return { v[0], v[1] };
-            return node_ == OutputNode::KeyboardAsPrinted ? runAnalogSampleFade<true> (v, a)
-                                                          : runAnalogSampleFade<false> (v, a);
+            if (colorMix_ != colorTarget_)
+            {
+                colorMix_ += colorTarget_ > colorMix_ ? 1 : -1;
+                const double a = static_cast<double> (colorMix_) / 256.0;
+                const double cleanL = convertCleanQ23 (word.l), colorL = convertColoredQ23 (word.l, ladderL_);
+                const double cleanR = convertCleanQ23 (word.r), colorR = convertColoredQ23 (word.r, ladderR_);
+                return { cleanL + a * (colorL - cleanL), cleanR + a * (colorR - cleanR) };
+            }
+            return { convertQ23 (word.l, ladderL_), convertQ23 (word.r, ladderR_) };
         }
-        return finishAnalog (Double2::make (convertQ23 (word.l, ladderL_), convertQ23 (word.r, ladderR_)));
+        return processDacSample (Double2::make (fromQ23 (word.l), fromQ23 (word.r)), [&] () noexcept {
+            if (colorMix_ != colorTarget_)
+            {
+                colorMix_ += colorTarget_ > colorMix_ ? 1 : -1;
+                const double a = static_cast<double> (colorMix_) / 256.0;
+                const double cleanL = convertCleanQ23 (word.l), colorL = convertColoredQ23 (word.l, ladderL_);
+                const double cleanR = convertCleanQ23 (word.r), colorR = convertColoredQ23 (word.r, ladderR_);
+                const Double2 v = Double2::make (cleanL + a * (colorL - cleanL), cleanR + a * (colorR - cleanR));
+                return node_ == OutputNode::KeyboardAsPrinted ? runAnalogSampleFade<true> (v, a)
+                                                              : runAnalogSampleFade<false> (v, a);
+            }
+            return finishAnalog (Double2::make (convertQ23 (word.l, ladderL_), convertQ23 (word.r, ladderR_)));
+        });
     }
 
     void processBlockQ23 (const StereoQ23* in, Stereo* out, int n) noexcept
     {
         hasRendered_ = true;
         int i = 0;
-        while (i < n && colorMix_ != colorTarget_)
+        while (i < n && (dacWarmup_ > 0 || dacMix_ != dacTarget_ || colorMix_ != colorTarget_))
         {
             out[i] = processQ23 (in[i]);
             ++i;
@@ -166,6 +219,19 @@ public:
                 out[i] = { convertQ23 (in[i].l, ladderL_), convertQ23 (in[i].r, ladderR_) };
             return;
         }
+        if (dacMix_ == 0)
+        {
+            analogWarm_ = false;
+            for (; i < n; ++i)
+            {
+                const Double2 delayedRaw = pushDigitalDelay (Double2::make (fromQ23 (in[i].l), fromQ23 (in[i].r)));
+                out[i] = { delayedRaw[0], delayedRaw[1] };
+            }
+            return;
+        }
+        analogWarm_ = true;
+        for (int k = i; k < n; ++k)
+            (void) pushDigitalDelay (Double2::make (fromQ23 (in[k].l), fromQ23 (in[k].r)));
         const bool hasPanel = node_ == OutputNode::KeyboardAsPrinted;
         const bool hasRail = color_.on && rail_ > 0.0;
         if (! hasPanel && hasRail)
@@ -512,6 +578,63 @@ private:
         return std::copysign (knee + span * softClip ((a - knee) / span), u);
     }
 
+    void resetAnalogState() noexcept
+    {
+        down_.reset();
+        buffer_.reset();
+        jack_.reset();
+        panel_.reset();
+        z_.fill (Double2::zero());
+        couplingX_.fill (Double2::zero());
+        couplingY_.fill (Double2::zero());
+    }
+
+    TRANCERA_FORCE_INLINE Double2 pushDigitalDelay (Double2 raw) noexcept
+    {
+        digitalDelay_[digitalDelayWrite_] = raw;
+        const std::size_t readIdx = (digitalDelayWrite_ - kDigitalDelaySamples) & kDigitalDelayMask;
+        digitalDelayWrite_ = (digitalDelayWrite_ + 1) & kDigitalDelayMask;
+        return digitalDelay_[readIdx];
+    }
+
+    template <class StepAnalog>
+    Stereo processDacSample (Double2 raw, StepAnalog&& stepAnalog) noexcept
+    {
+        const Double2 delayedRaw = pushDigitalDelay (raw);
+        if (dacWarmup_ > 0)
+        {
+            (void) stepAnalog();
+            --dacWarmup_;
+            if (dacWarmup_ == 0)
+                analogWarm_ = true;
+            return { delayedRaw[0], delayedRaw[1] };
+        }
+        if (dacMix_ == 0 && dacTarget_ == 0)
+        {
+            analogWarm_ = false;
+            return { delayedRaw[0], delayedRaw[1] };
+        }
+        const Stereo yAnalog = stepAnalog();
+        if (dacMix_ != dacTarget_)
+        {
+            dacMix_ += dacTarget_ > dacMix_ ? 1 : -1;
+            if (dacMix_ == 0)
+                analogWarm_ = false;
+            const double m = static_cast<double> (dacMix_) / 256.0;
+            return {
+                delayedRaw[0] + m * (yAnalog.l - delayedRaw[0]),
+                delayedRaw[1] + m * (yAnalog.r - delayedRaw[1])
+            };
+        }
+        analogWarm_ = true;
+        return yAnalog;
+    }
+
+    static constexpr std::size_t kDigitalDelaySize = 64;
+    static constexpr std::size_t kDigitalDelayMask = kDigitalDelaySize - 1;
+    static constexpr std::size_t kDigitalDelaySamples = oversampling::Downsampler8<Double2>::latencySamples;
+    static constexpr int kAnalogWarmupSamples = static_cast<int> (kDigitalDelaySamples) + 3;
+
     oversampling::Downsampler8<Double2> down_;
     FirstOrder buffer_, jack_, panel_;
     OutputNode node_ { OutputNode::Rack };
@@ -519,10 +642,14 @@ private:
     std::array<double, 4> b_ { 1.0, 0.0, 0.0, 0.0 }, bNorm_ { 1.0, 0.0, 0.0, 0.0 };
     std::array<Double2, 3> z_ {};
     std::array<Double2, 4> couplingX_ {}, couplingY_ {};
+    std::array<Double2, kDigitalDelaySize> digitalDelay_ {};
+    std::size_t digitalDelayWrite_ { 0 };
     double normalise_ { 1.0 }, couplingPole_ { 1.0 }, couplingGain_ { 1.0 };
     AnalogColor color_;
     double builtDnlLsb_ { -1.0 };
     int colorMix_ { 256 }, colorTarget_ { 256 };
+    bool dacEnabled_ { true }, analogWarm_ { true };
+    int dacMix_ { 256 }, dacTarget_ { 256 }, dacWarmup_ { 0 };
     bool hasRendered_ { false };
     double rail_ { 1.35 }, knee_ { 0.75 * 1.35 };
     std::array<double, 256> ladderL_ {}, ladderR_ {};

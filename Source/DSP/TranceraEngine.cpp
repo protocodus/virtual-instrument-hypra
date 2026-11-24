@@ -1268,9 +1268,11 @@ void Engine::renderChunk (Stereo* out, int n) noexcept
     }
     else
     {
+        // With DAC Off there are no coupling caps to drain ToneControl's ~-102 dBFS fixed-point DC floor.
+        const double silenceCeiling = output_.dacEnabled() ? 1.0e-8 : 2.5e-5;
         int sCount = silentTicks_;
         for (int j = 0; j < n; ++j)
-            sCount = (fastAbs (out[j].l) <= 1.0e-8 && fastAbs (out[j].r) <= 1.0e-8) ? (sCount + 1) : 0;
+            sCount = (fastAbs (out[j].l) <= silenceCeiling && fastAbs (out[j].r) <= silenceCeiling) ? (sCount + 1) : 0;
         silentTicks_ = sCount;
     }
 }

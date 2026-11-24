@@ -3,6 +3,7 @@
 // Szabo 2010 (a black-box measurement of the hardware).
 #include "../Source/DSP/TranceraControls.h"
 #include "../Source/DSP/TranceraEngine.h"
+#include "../Source/DSP/TranceraSysEx.h"
 
 #include <algorithm>
 #include <complex>
@@ -2480,13 +2481,434 @@ void tier1Features()
     }
 }
 
+void dacBypass()
+{
+    const double fs = kEngineRate;
+
+    // 1. DAC = Off on OutputNode::Rack emits exact 37-sample-delayed Q23 digital words (single & block).
+    {
+        AnalogOutput refSingle, blkOut;
+        refSingle.prepare (OutputNode::Rack);
+        refSingle.setDacEnabled (false);
+        blkOut.prepare (OutputNode::Rack);
+        blkOut.setDacEnabled (false);
+
+        constexpr int total = 1024;
+        std::vector<StereoQ23> in (total);
+        for (int i = 0; i < total; ++i)
+        {
+            const double ph = 0.013 * i;
+            in[static_cast<std::size_t> (i)] = { toQ23 (0.7 * std::sin (ph)), toQ23 (0.5 * std::cos (1.7 * ph)) };
+        }
+        std::vector<Stereo> singleOut (total), blockOut (total);
+        for (int i = 0; i < total; ++i)
+            singleOut[static_cast<std::size_t> (i)] = refSingle.processQ23 (in[static_cast<std::size_t> (i)]);
+        int pos = 0;
+        for (const int step : { 1, 17, 64, 129, 513, 300 })
+        {
+            const int n = std::min (step, total - pos);
+            if (n > 0)
+            {
+                blkOut.processBlockQ23 (in.data() + pos, blockOut.data() + pos, n);
+                pos += n;
+            }
+        }
+        bool exactDelay = true;
+        for (int i = 0; i < total; ++i)
+        {
+            const Stereo& s = singleOut[static_cast<std::size_t> (i)];
+            const Stereo& b = blockOut[static_cast<std::size_t> (i)];
+            const double expL = i >= 37 ? fromQ23 (in[static_cast<std::size_t> (i - 37)].l) : 0.0;
+            const double expR = i >= 37 ? fromQ23 (in[static_cast<std::size_t> (i - 37)].r) : 0.0;
+            exactDelay = exactDelay && s.l == b.l && s.r == b.r && s.l == expL && s.r == expR;
+        }
+        check (exactDelay, "DAC Off emits exact 37-sample-delayed 24-bit Q23 words bit-for-bit");
+    }
+
+    // 2. DAC = Off is spectrally flat across 50 Hz..20 kHz and distortionless at 0.99 FS; DAC = On applies analog response & rail.
+    auto measureNode = [&] (bool dacOn, double amp, double hz)
+    {
+        AnalogOutput a;
+        a.prepare (OutputNode::Rack);
+        a.setDacEnabled (dacOn);
+        std::vector<double> out (44100);
+        for (int i = -88200; i < 44100; ++i)
+        {
+            const Q23 w = toQ23 (amp * std::sin (kTwoPi * hz * i / fs));
+            const Stereo y = a.processQ23 ({ w, w });
+            if (i >= 0)
+                out[static_cast<std::size_t> (i)] = y.l;
+        }
+        return out;
+    };
+    const auto thd = [] (const std::vector<double>& x, double hz)
+    {
+        double h = 0.0;
+        for (int k = 2; k <= 7; ++k)
+            h += std::pow (tone (x, hz * k), 2.0);
+        return std::sqrt (h) / tone (x, hz);
+    };
+    const auto dig1k = measureNode (false, 0.25, 1000.0);
+    for (const double hz : { 50.0, 1000.0, 10000.0, 20000.0 })
+        near (db (tone (measureNode (false, 0.25, hz), hz) / tone (dig1k, 1000.0)), 0.0, 0.002,
+              "DAC Off is flat within 0.002 dB at " + std::to_string (static_cast<int> (hz)) + " Hz");
+    const auto dacBass = measureNode (true, 0.25, 50.0);
+    const auto dac1k = measureNode (true, 0.25, 1000.0);
+    check (db (tone (dacBass, 50.0) / tone (dac1k, 1000.0)) > 1.5, "DAC On exhibits analog bass shelf boost at 50 Hz");
+    const auto digHot = measureNode (false, 0.99, 50.0), dacHot = measureNode (true, 0.99, 50.0);
+    check (thd (digHot, 50.0) < 1.0e-5 && thd (dacHot, 50.0) > 1.0e-3,
+           "DAC Off stays clean near full scale while DAC On rounds peaks near the op-amp rail");
+
+    // 3. Impulse group delay alignment: DAC On and DAC Off peak at the same sample (37 at 88.2 kHz).
+    {
+        AnalogOutput aOn, aOff;
+        aOn.prepare (OutputNode::Rack);
+        aOn.setDacEnabled (true);
+        aOff.prepare (OutputNode::Rack);
+        aOff.setDacEnabled (false);
+        constexpr int t0 = 200;
+        int pkOn = -1, pkOff = -1;
+        double maxOn = 0.0, maxOff = 0.0;
+        for (int i = 0; i < 400; ++i)
+        {
+            const Q23 w = (i == t0) ? toQ23 (0.5) : 0;
+            const Stereo yOn = aOn.processQ23 ({ w, w });
+            const Stereo yOff = aOff.processQ23 ({ w, w });
+            if (std::abs (yOn.l) > maxOn) { maxOn = std::abs (yOn.l); pkOn = i; }
+            if (std::abs (yOff.l) > maxOff) { maxOff = std::abs (yOff.l); pkOff = i; }
+        }
+        check (pkOff == t0 + 37, "DAC Off impulse peaks at exact +37 samples");
+        check (std::abs (pkOn - pkOff) <= 2, "DAC On impulse aligns within 2 samples of DAC Off (Downsampler8 + analog IIR group delay)");
+    }
+
+    // 4. Engine true-idle silence with DAC Off.
+    {
+        Engine idleEng;
+        idleEng.prepare (48000.0, 991u);
+        idleEng.setDacEnabled (false);
+        Patch shortPat;
+        shortPat.osc1 = { Wave1::Saw, 0, 0 };
+        shortPat.balance = -64;
+        shortPat.amp = { 0, 8, 0, 4 };
+        idleEng.setPatch (Part::Upper, shortPat);
+        std::vector<float> il (48000), ir (48000);
+        idleEng.render (il.data(), ir.data(), 48000);
+        check (std::all_of (il.begin(), il.end(), [] (float v) { return v == 0.0f; })
+               && std::all_of (ir.begin(), ir.end(), [] (float v) { return v == 0.0f; }),
+               "DAC Off pre-trigger render emits exact zeros");
+        idleEng.noteOn (60, 100);
+        idleEng.allNotesOff();
+        for (int b = 0; b < 8; ++b)
+            idleEng.render (il.data(), ir.data(), 48000);
+        check (std::all_of (il.end() - 4096, il.end(), [] (float v) { return v == 0.0f; }),
+               "DAC Off released voice decays into exact idle zeros");
+    }
+
+    // 5. Cold Off->On, hot On->Off, mid-warmup cancel (Off->On->Off), and mid-fade reversal are click-free & chunk-invariant.
+    {
+        auto maxD2 = [] (const std::vector<float>& L, const std::vector<float>& R, int a, int b)
+        {
+            double m = 0.0;
+            for (int i = std::max (2, a); i < std::min (static_cast<int> (L.size()), b); ++i)
+            {
+                const double dL = std::abs (double (L[size_t (i)]) - 2.0 * L[size_t (i - 1)] + L[size_t (i - 2)]);
+                const double dR = std::abs (double (R[size_t (i)]) - 2.0 * R[size_t (i - 1)] + R[size_t (i - 2)]);
+                m = std::max ({ m, dL, dR });
+            }
+            return m;
+        };
+        auto runScript = [] (int chunk)
+        {
+            Patch p;
+            p.osc1 = { Wave1::Triangle, 0, 0 };
+            p.balance = -64;
+            p.filter = { FilterType::LowPass, true, 90, 20, 0, 0, 0, { 0, 0, 127, 40 } };
+            p.amp = { 0, 0, 127, 40 };
+            p.level = 110;
+            p.effects.bass = 20;
+
+            Engine e;
+            e.prepare (48000.0, 2026u);
+            e.setDacEnabled (false);
+            e.setPatch (Part::Upper, p);
+            e.noteOn (52, 110);
+
+            constexpr int len = 16000;
+            std::vector<float> L (len), R (len);
+            const std::array<std::pair<int, bool>, 6> events { {
+                { 4000, true },   // cold Off -> On
+                { 4005, false },  // cancel during warmup!
+                { 5000, true },   // cold Off -> On completes
+                { 7000, false },  // hot On -> Off
+                { 7035, true },   // mid-crossfade reversal Off -> On
+                { 9500, false }   // hot On -> Off completes
+            } };
+            std::size_t evIdx = 0;
+            int pos = 0;
+            while (pos < len)
+            {
+                while (evIdx < events.size() && pos == events[evIdx].first)
+                    e.setDacEnabled (events[evIdx++].second);
+                const int nextEv = evIdx < events.size() ? events[evIdx].first : len;
+                const int step = std::min ({ chunk, nextEv - pos, len - pos });
+                e.render (L.data() + pos, R.data() + pos, step);
+                pos += step;
+            }
+            return std::pair<std::vector<float>, std::vector<float>> { std::move (L), std::move (R) };
+        };
+        const auto [L1, R1] = runScript (1);
+        const auto [L64, R64] = runScript (64);
+        const auto [L997, R997] = runScript (997);
+        check (L1 == L64 && R1 == R64 && L1 == L997 && R1 == R997,
+               "DAC transitions (incl. warmup cancel & fade reversal) are bit-identical across block sizes 1, 64, 997");
+        const double baseD2 = maxD2 (L64, R64, 2000, 3900);
+        const double transD2 = maxD2 (L64, R64, 3990, 11000);
+        check (transD2 <= std::max (0.01, 2.5 * baseD2),
+               "DAC toggle stress test stays glitch-free D2=" + std::to_string (transD2) + " base=" + std::to_string (baseD2));
+    }
+}
+
+void sysexCodec()
+{
+    using namespace trancera::sysex;
+
+    // 1. 7-bit address arithmetic & Roland checksum boundaries.
+    check (linearOffset (0x00, 0x7F) == 127 && linearOffset (0x01, 0x00) == 128,
+           "7-bit base-128 offset steps seamlessly across 0x007F -> 0x0100");
+    check (linearOffset (0x01, 0x72) == 242 && splitOffset (242) == std::pair<std::uint8_t, std::uint8_t> { 0x01, 0x72 },
+           "JP-8080 hardware split offset 0x0172 decodes/encodes to 242");
+    check (formatSlotLabel (SlotKind::UserPatch, 0) == "U-A11"
+           && formatSlotLabel (SlotKind::UserPatch, 63) == "U-A88"
+           && formatSlotLabel (SlotKind::UserPatch, 64) == "U-B11"
+           && formatSlotLabel (SlotKind::UserPatch, 127) == "U-B88",
+           "user slot octal labels span U-A11..U-B88");
+
+    // 2. Full Patch + 40-destination VelocityMatrix round-trip (JP-8000 single packet).
+    Patch full {};
+    full.osc1 = { Wave1::FeedbackOsc, 77, 103 };
+    full.osc2 = { Wave2::Triangle, true, -19, 37, 91, 44 };
+    full.ring = true;
+    full.xmod = 85;
+    full.balance = 29;
+    full.destination = ModDestination::XMod;
+    full.pitchLfo = -41;
+    full.pitchEnvDepth = 52;
+    full.pitchAttack = 17;
+    full.pitchDecay = 88;
+    full.filter = { FilterType::BandPass, false, 63, 99, -22, 31, -48, { 12, 54, 87, 33 } };
+    full.amp = { 9, 44, 110, 61 };
+    full.level = 115;
+    full.pan = PanMode::Auto;
+    full.ampLfo = -18;
+    full.lfo1 = { LfoWave::SampleHold, 93, 41 };
+    full.lfo2 = { 77, -12, 39, -27 };
+    full.effects = { 21, -33, ChorusType::JetPhasing, 72, DelayType::PanShort, 83, 66, 49, 0 };
+    full.mono = true;
+    full.legato = true;
+    full.portamento = true;
+    full.portamentoTime = 65;
+    full.oscShift = -2;
+    full.bendUp = 12;
+    full.bendDown = 5;
+    full.velocityMatrix = {
+        true,
+        -127, -1, 0, 1, 127,
+        -99, 88, -45, 19, -64,
+        120, -111, -50, 100, -1, 127,
+        -80, 55, -13, 42, -31,
+        127, -127, 64, -64, 32,
+        105, -20, 15, -10, 5, -5, 44,
+        -127, 127, 60, -30, 15, -7, 127
+    };
+
+    const auto pkt8k = encodePatch (full, "AcidLead 16CharX", Format::JP8000, SlotKind::TempUpper);
+    check (pkt8k.size() == 6 + 4 + kKeyboardPatchBytes + 2, "JP-8000 single DT1 packet has exact 251-byte wire length");
+    const ParseResult dec8k = parseStream (pkt8k.data(), pkt8k.size());
+    check (dec8k.patches.size() == 1 && dec8k.messagesParsed == 1 && dec8k.badChecksums == 0,
+           "JP-8000 single patch decodes cleanly");
+    if (! dec8k.patches.empty())
+    {
+        const PatchRecord& r = dec8k.patches[0];
+        const Patch& g = r.patch;
+        check (r.name == "AcidLead 16CharX" && r.detectedFormat == Format::JP8000, "16-char name & JP-8000 format preserved");
+        check (g.osc1.wave == full.osc1.wave && g.osc1.ctrl1 == full.osc1.ctrl1 && g.osc1.ctrl2 == full.osc1.ctrl2
+               && g.osc2.wave == full.osc2.wave && g.osc2.sync == full.osc2.sync && g.osc2.range == full.osc2.range
+               && g.osc2.fine == full.osc2.fine && g.osc2.pulseWidth == full.osc2.pulseWidth && g.osc2.pwmDepth == full.osc2.pwmDepth
+               && g.ring == full.ring && g.xmod == full.xmod && g.balance == full.balance && g.destination == full.destination
+               && g.pitchLfo == full.pitchLfo && g.pitchEnvDepth == full.pitchEnvDepth && g.pitchAttack == full.pitchAttack && g.pitchDecay == full.pitchDecay
+               && g.filter.type == full.filter.type && g.filter.steep == full.filter.steep && g.filter.cutoff == full.filter.cutoff
+               && g.filter.resonance == full.filter.resonance && g.filter.keyFollow == full.filter.keyFollow
+               && g.filter.lfoDepth == full.filter.lfoDepth && g.filter.envDepth == full.filter.envDepth
+               && g.filter.env.attack == full.filter.env.attack && g.filter.env.decay == full.filter.env.decay
+               && g.filter.env.sustain == full.filter.env.sustain && g.filter.env.release == full.filter.env.release
+               && g.level == full.level && g.ampLfo == full.ampLfo && g.pan == full.pan
+               && g.amp.attack == full.amp.attack && g.amp.decay == full.amp.decay && g.amp.sustain == full.amp.sustain && g.amp.release == full.amp.release
+               && g.lfo1.wave == full.lfo1.wave && g.lfo1.rate == full.lfo1.rate && g.lfo1.fade == full.lfo1.fade
+               && g.lfo2.rate == full.lfo2.rate && g.lfo2.pitch == full.lfo2.pitch && g.lfo2.filter == full.lfo2.filter && g.lfo2.amp == full.lfo2.amp
+               && g.effects.bass == full.effects.bass && g.effects.treble == full.effects.treble
+               && g.effects.chorusType == full.effects.chorusType && g.effects.chorus == full.effects.chorus
+               && g.effects.delayType == full.effects.delayType && g.effects.delayTime == full.effects.delayTime
+               && g.effects.feedback == full.effects.feedback && g.effects.delay == full.effects.delay
+               && g.mono == full.mono && g.legato == full.legato && g.portamento == full.portamento
+               && g.portamentoTime == full.portamentoTime && g.oscShift == full.oscShift
+               && g.bendUp == full.bendUp && g.bendDown == full.bendDown,
+               "JP-8000 all 50+ synth controls survive DT1 round-trip bit-exact");
+
+        const VelocityMatrix& a = g.velocityMatrix;
+        const VelocityMatrix& b = full.velocityMatrix;
+        check (a.on && a.lfo1Rate == b.lfo1Rate && a.lfo1Fade == b.lfo1Fade && a.lfo2Rate == b.lfo2Rate
+               && a.xmod == b.xmod && a.balance == b.balance && a.pitchLfo == b.pitchLfo && a.pitchLfo2 == b.pitchLfo2
+               && a.pitchEnvDepth == b.pitchEnvDepth && a.pitchAttack == b.pitchAttack && a.pitchDecay == b.pitchDecay
+               && a.osc1Ctrl1 == b.osc1Ctrl1 && a.osc1Ctrl2 == b.osc1Ctrl2 && a.osc2Range == b.osc2Range && a.osc2Fine == b.osc2Fine
+               && a.osc2Ctrl1 == b.osc2Ctrl1 && a.osc2Ctrl2 == b.osc2Ctrl2 && a.cutoff == b.cutoff && a.resonance == b.resonance
+               && a.keyFollow == b.keyFollow && a.filterLfo == b.filterLfo && a.filterLfo2 == b.filterLfo2
+               && a.envDepth == b.envDepth && a.filterAttack == b.filterAttack && a.filterDecay == b.filterDecay
+               && a.filterSustain == b.filterSustain && a.filterRelease == b.filterRelease && a.level == b.level
+               && a.ampLfo == b.ampLfo && a.ampLfo2 == b.ampLfo2 && a.ampAttack == b.ampAttack && a.ampDecay == b.ampDecay
+               && a.ampSustain == b.ampSustain && a.ampRelease == b.ampRelease && a.bass == b.bass && a.treble == b.treble
+               && a.multiFx == b.multiFx && a.delayTime == b.delayTime && a.delayFeedback == b.delayFeedback
+               && a.delayLevel == b.delayLevel && a.portamento == b.portamento,
+               "all 40 two-byte VelocityMatrix fields survive 0x011B..0x016A round-trip exact");
+    }
+
+    // 3. JP-8080 248B split (242 + 6 at +01 72) vs single 248B equivalence.
+    Patch rackPatch = full;
+    rackPatch.unison = true;
+    rackPatch.unisonDetune = 37;
+    const auto split8080 = encodePatch (rackPatch, "Rack Unison", Format::JP8080, SlotKind::TempUpper, 0, kDefaultDeviceId, true);
+    const auto flat8080 = encodePatch (rackPatch, "Rack Unison", Format::JP8080, SlotKind::TempUpper, 0, kDefaultDeviceId, false);
+    const ParseResult dSplit = parseStream (split8080.data(), split8080.size());
+    const ParseResult dFlat = parseStream (flat8080.data(), flat8080.size());
+    check (dSplit.patches.size() == 1 && dSplit.messagesParsed == 2 && dFlat.patches.size() == 1 && dFlat.messagesParsed == 1,
+           "JP-8080 split emits 2 packets and flat emits 1 packet");
+    check (dSplit.patches[0].detectedFormat == Format::JP8080
+           && dSplit.patches[0].patch.unison && dSplit.patches[0].patch.unisonDetune == 37
+           && dFlat.patches[0].patch.unison && dFlat.patches[0].patch.unisonDetune == 37,
+           "JP-8080 Unison + UnisonDetune survive both split and flat encodings");
+
+    // 4. 128-patch User Bank U:A11..U:B88 round-trip.
+    std::vector<std::pair<std::string, Patch>> bankIn;
+    bankIn.reserve (kMaxUserPatches);
+    for (int i = 0; i < static_cast<int> (kMaxUserPatches); ++i)
+    {
+        Patch pi {};
+        pi.osc1.ctrl1 = i;
+        pi.filter.cutoff = 127 - i;
+        pi.unison = (i % 3 == 0);
+        pi.unisonDetune = i % 51;
+        bankIn.emplace_back ("User " + std::to_string (i), pi);
+    }
+    const auto bankSyx = encodeUserBank (bankIn, Format::JP8080, 0x13, true);
+    const ParseResult bankOut = parseStream (bankSyx.data(), bankSyx.size());
+    bool bankOk = bankOut.patches.size() == kMaxUserPatches && bankOut.badChecksums == 0;
+    for (int i = 0; i < static_cast<int> (kMaxUserPatches) && bankOk; ++i)
+    {
+        const PatchRecord& pr = bankOut.patches[static_cast<std::size_t> (i)];
+        bankOk = pr.slotKind == SlotKind::UserPatch && pr.slotIndex == i
+              && pr.name == bankIn[static_cast<std::size_t> (i)].first
+              && pr.patch.osc1.ctrl1 == i && pr.patch.filter.cutoff == 127 - i
+              && pr.patch.unison == (i % 3 == 0) && pr.patch.unisonDetune == (i % 51);
+    }
+    check (bankOk, "128-patch User Bank U:A11..U:B88 round-trips in order");
+
+    // 5. Performance Common + PartUpper/PartLower DelaySync overlay + warnings + SMF .mid unwrapping.
+    auto makeDt1 = [] (std::uint8_t a3, std::uint8_t a2, std::uint8_t a1, std::uint8_t a0, std::vector<std::uint8_t> data)
+    {
+        std::vector<std::uint8_t> msg { 0xF0, 0x41, 0x10, 0x00, 0x06, 0x12, a3, a2, a1, a0 };
+        msg.insert (msg.end(), data.begin(), data.end());
+        msg.push_back (computeChecksum (msg.data() + 6, 4 + data.size()));
+        msg.push_back (0xF7);
+        return msg;
+    };
+    std::vector<std::uint8_t> perfCommon (0x25, 0);
+    perfCommon[0x15] = 0; // UPPER & LOWER arp
+    perfCommon[0x17] = 1; // Arp ON
+    perfCommon[0x18] = 2; // Up/Down
+    perfCommon[0x19] = 3; // 1/12 -> Trancera 1/8T (4)
+    perfCommon[0x1A] = 2; // 3 Octaves
+    perfCommon[0x1B] = 1; // Hold ON
+    std::vector<std::uint8_t> perfStream = makeDt1 (0x01, 0x00, 0x00, 0x00, perfCommon);
+    auto partUp = makeDt1 (0x01, 0x00, 0x10, 0x00, { 0, 0, 0, 0, 7 }); // DelaySync 7 = 1/4 -> Trancera 9
+    auto partLo = makeDt1 (0x01, 0x00, 0x11, 0x00, { 0, 0, 0, 0, 1 }); // DelaySync 1 = 1/16 -> Trancera 3
+    perfStream.insert (perfStream.end(), partUp.begin(), partUp.end());
+    perfStream.insert (perfStream.end(), partLo.begin(), partLo.end());
+    Patch pUp {}, pLo {};
+    auto patchUp = encodePatch (pUp, "Perf Upper", Format::JP8000, SlotKind::TempUpper);
+    auto patchLo = encodePatch (pLo, "Perf Lower", Format::JP8000, SlotKind::TempLower);
+    // Test Osc2=Noise (3) on Upper and MultiFX=Distortion (12) on Lower by tweaking payload & recomputing checksum.
+    patchUp[6 + 4 + 0x21] = 3;
+    patchUp[patchUp.size() - 2] = computeChecksum (patchUp.data() + 6, patchUp.size() - 8);
+    patchLo[6 + 4 + 0x3D] = 12;
+    patchLo[patchLo.size() - 2] = computeChecksum (patchLo.data() + 6, patchLo.size() - 8);
+    perfStream.insert (perfStream.end(), patchUp.begin(), patchUp.end());
+    perfStream.insert (perfStream.end(), patchLo.begin(), patchLo.end());
+
+    const ParseResult perfRes = parseStream (perfStream.data(), perfStream.size());
+    check (perfRes.patches.size() == 2
+           && perfRes.patches[0].patch.arp.on
+           && perfRes.patches[0].patch.arp.mode == ArpMode::UpDown
+           && perfRes.patches[0].patch.arp.rate == 4
+           && perfRes.patches[0].patch.arp.range == 2
+           && perfRes.patches[0].patch.arp.hold
+           && perfRes.patches[0].patch.effects.delaySync == 9
+           && perfRes.patches[0].patch.osc2.wave == Wave2::Triangle
+           && perfRes.patches[0].warnings.osc2NoiseMappedToTriangle
+           && perfRes.patches[1].patch.effects.delaySync == 3
+           && perfRes.patches[1].patch.effects.chorusType == ChorusType::SuperSlow
+           && perfRes.patches[1].warnings.distortionMappedToChorus,
+           "Performance overlay maps Arp + DelaySync + graceful JP-8080 Osc2Noise/Distortion fallbacks");
+
+    // 6. Standard MIDI File (.mid) extraction + corrupt checksum rejection.
+    std::vector<std::uint8_t> trackBody;
+    trackBody.push_back (0x00); // delta 0
+    trackBody.push_back (0xF0);
+    std::uint32_t sxLen = static_cast<std::uint32_t> (pkt8k.size() - 1); // excludes leading F0
+    trackBody.push_back (static_cast<std::uint8_t> (((sxLen >> 7) & 0x7Fu) | 0x80u));
+    trackBody.push_back (static_cast<std::uint8_t> (sxLen & 0x7Fu));
+    trackBody.insert (trackBody.end(), pkt8k.begin() + 1, pkt8k.end());
+    trackBody.insert (trackBody.end(), { 0x00, 0xFF, 0x2F, 0x00 }); // End of track
+    std::vector<std::uint8_t> smf { 'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 0, 96,
+                                    'M', 'T', 'r', 'k',
+                                    static_cast<std::uint8_t> ((trackBody.size() >> 24) & 0xFF),
+                                    static_cast<std::uint8_t> ((trackBody.size() >> 16) & 0xFF),
+                                    static_cast<std::uint8_t> ((trackBody.size() >> 8) & 0xFF),
+                                    static_cast<std::uint8_t> (trackBody.size() & 0xFF) };
+    smf.insert (smf.end(), trackBody.begin(), trackBody.end());
+    const ParseResult smfRes = parseStream (smf.data(), smf.size());
+    check (smfRes.patches.size() == 1 && smfRes.patches[0].name == "AcidLead 16CharX",
+           "SMF (.mid) wrapped DT1 SysEx unwraps cleanly");
+
+    auto corrupt = pkt8k;
+    corrupt[corrupt.size() - 2] ^= 0x01u;
+    const ParseResult badStrict = parseStream (corrupt.data(), corrupt.size(), true);
+    const ParseResult badLenient = parseStream (corrupt.data(), corrupt.size(), false);
+    check (badStrict.badChecksums == 1 && badStrict.patches.empty()
+           && badLenient.badChecksums == 1 && badLenient.patches.size() == 1 && badLenient.patches[0].warnings.checksumErrors,
+           "checksum verification rejects strictly and flags leniently");
+
+    // 7. Velocity bridge round-trip for 70-control exports.
+    Patch baked = full;
+    bakeVelocityMatrixToControls (baked);
+    check (baked.velocityAmp == 105 && baked.velocityFilter == -40,
+           "bakeVelocityMatrixToControls bridges VelocityMatrix level & cutoff to panel controls");
+    Patch panelOnly {};
+    panelOnly.velocityAmp = 72;
+    panelOnly.velocityFilter = -32;
+    const auto exportedPanel = encodePatch (panelOnly, "PanelVel", Format::JP8000);
+    const ParseResult reimportedPanel = parseStream (exportedPanel.data(), exportedPanel.size());
+    check (reimportedPanel.patches.size() == 1 && reimportedPanel.patches[0].patch.velocityMatrix.on
+           && reimportedPanel.patches[0].patch.velocityMatrix.level == 72
+           && std::abs (reimportedPanel.patches[0].patch.velocityMatrix.cutoff - (-65)) <= 1,
+           "panel Velocity & FilterVelocity export into JP VelocityMatrix");
+}
+
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
         { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy }, { "AnalogColor", analogColor },
-        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch }, { "UnisonAndArp", unisonAndArp }, { "Tier1Features", tier1Features } };
+        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch }, { "UnisonAndArp", unisonAndArp }, { "Tier1Features", tier1Features }, { "DacBypass", dacBypass }, { "SysEx", sysexCodec } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

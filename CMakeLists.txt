@@ -4,7 +4,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum supported macOS version")
 endif()
 
-project(Trancera VERSION 0.9.2 LANGUAGES CXX)
+project(Trancera VERSION 0.9.3 LANGUAGES CXX)
 
 # Source/DSP is C++17 and JUCE-free: the Rack Extension compiles it directly.
 set(CMAKE_CXX_STANDARD 17)
@@ -20,7 +20,7 @@ if(TRANCERA_ENABLE_SANITIZERS)
     add_link_options(-fsanitize=address,undefined,float-cast-overflow)
 endif()
 
-add_library(TranceraDSP STATIC Source/DSP/TranceraEngine.cpp Source/DSP/TranceraControls.cpp)
+add_library(TranceraDSP STATIC Source/DSP/TranceraEngine.cpp Source/DSP/TranceraControls.cpp Source/DSP/TranceraSysEx.cpp)
 target_include_directories(TranceraDSP PUBLIC Source/DSP)
 target_compile_options(TranceraDSP PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
 
@@ -35,8 +35,12 @@ endif()
 add_executable(TranceraRenderEvents Tools/RenderEvents.cpp)
 target_link_libraries(TranceraRenderEvents PRIVATE TranceraDSP)
 
+add_executable(TranceraSysEx Tools/TranceraSysExTool.cpp)
+target_link_libraries(TranceraSysEx PRIVATE TranceraDSP)
+target_compile_options(TranceraSysEx PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
+
 enable_testing()
-foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls TriangleShape MultiFxTypes EnvelopeSmoother ToneSaturation Osc2AndSync ControlAccuracy AnalogColor FixedPointAndMatrix AutomationGlitch UnisonAndArp Tier1Features)
+foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls TriangleShape MultiFxTypes EnvelopeSmoother ToneSaturation Osc2AndSync ControlAccuracy AnalogColor FixedPointAndMatrix AutomationGlitch UnisonAndArp Tier1Features DacBypass SysEx)
     add_test(NAME Trancera.${suite} COMMAND TranceraTests ${suite})
     set_tests_properties(Trancera.${suite} PROPERTIES LABELS unit)
 endforeach()

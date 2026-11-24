@@ -29,13 +29,10 @@ public:
     void setMode (KeyMode mode) noexcept;
     void setPartDetune (int cents) noexcept { partDetune_ = std::clamp (cents, -50, 50); }
     void setOutputNode (OutputNode node) noexcept { output_.prepare (node); }
-    // The DAC's and op-amps' colour on the analogue nodes (on by default; see AnalogColor).
-    void setAnalogColor (bool on) noexcept
-    {
-        AnalogColor c = output_.color();
-        c.on = on;
-        output_.setColor (c);
-    }
+    // Enables or bypasses the DAC and analogue output stage (on by default).
+    void setDacEnabled (bool on) noexcept { output_.setDacEnabled (on); }
+    [[nodiscard]] bool dacEnabled() const noexcept { return output_.dacEnabled(); }
+    void setAnalogColor (bool on) noexcept { setDacEnabled (on); }
     void setVolume (double gain) noexcept { volume_ = std::clamp (gain, 0.0, 2.0); }
     // A host's master tuning, in cents, on every note (held ones too).
     void setTune (double cents) noexcept;

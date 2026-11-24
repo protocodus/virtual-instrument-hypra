@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trancera SysEx &harr; .repatch Converter</title>
+<style>
+:root {
+  --bg: #070b14;
+  --panel: #0e1628;
+  --panel-alt: #131e36;
+  --border: #233352;
+  --text: #e6edf7;
+  --muted: #8ea0c0;
+  --teal: #68dac1;
+  --amber: #f69234;
+  --danger: #f87171;
+  --warn: #fbbf24;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 24px 18px 48px;
+  background: radial-gradient(circle at top, #122140 0%, var(--bg) 55%);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.wrap { max-width: 1080px; margin: 0 auto; }
+header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+h1 { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: 0.02em; }
+h1 span { color: var(--teal); }
+.subtitle { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+.badge-local {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(104, 218, 193, 0.4);
+  background: rgba(104, 218, 193, 0.1);
+  color: var(--teal);
+  font-weight: 600;
+}
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 26px 20px;
+  text-align: center;
+  background: rgba(14, 22, 40, 0.78);
+  transition: border-color 0.15s, background 0.15s;
+  cursor: pointer;
+  margin-bottom: 18px;
+}
+.dropzone.drag {
+  border-color: var(--teal);
+  background: rgba(104, 218, 193, 0.08);
+}
+.dropzone strong { color: var(--teal); font-size: 15px; display: block; margin-bottom: 4px; }
+.dropzone small { color: var(--muted); display: block; margin-bottom: 12px; }
+.tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.tab {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tab.active {
+  background: var(--panel-alt);
+  color: var(--text);
+  border-color: var(--teal);
+  box-shadow: inset 0 -2px 0 var(--teal);
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.opts { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; }
+label.field { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+select, input[type="text"], input[type="number"] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-family: var(--sans);
+  font-size: 12.5px;
+}
+input[type="text"].name-edit { font-family: var(--mono); width: 155px; }
+button.btn {
+  background: var(--panel-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 13px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button.btn:hover:not(:disabled) { border-color: var(--teal); color: var(--teal); }
+button.btn-primary {
+  background: linear-gradient(135deg, #279d86, #1d7e6b);
+  border-color: #3cc7ab;
+  color: #041310;
+}
+button.btn-primary:hover:not(:disabled) { color: #020907; filter: brightness(1.08); }
+button.btn-amber {
+  background: linear-gradient(135deg, #f69234, #d97719);
+  border-color: #fbab5e;
+  color: #160a02;
+}
+button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.summary {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.pill {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  background: rgba(142, 160, 192, 0.14);
+  color: var(--text);
+}
+.pill-teal { background: rgba(104, 218, 193, 0.14); color: var(--teal); }
+.pill-amber { background: rgba(246, 146, 52, 0.16); color: var(--amber); }
+.pill-warn { background: rgba(251, 191, 36, 0.14); color: var(--warn); }
+.pill-err { background: rgba(248, 113, 113, 0.18); color: var(--danger); }
+table { width: 100%; border-collapse: collapse; }
+th, td {
+  text-align: left;
+  padding: 8px 8px;
+  border-bottom: 1px solid rgba(35, 51, 82, 0.7);
+  vertical-align: middle;
+}
+th { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
+.param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+  gap: 5px 12px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.param-item { display: flex; justify-content: space-between; color: var(--muted); }
+.param-item span:last-child { color: var(--text); }
+.empty { padding: 28px 12px; text-align: center; color: var(--muted); }
+.hidden { display: none; }
+.midi-bar {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1><span>Trancera</span> SysEx &harr; .repatch Converter</h1>
+      <div class="subtitle">Offline Roland JP-8000 / JP-8080 DT1 (.syx, .mid) &harr; Reason Trancera (.repatch) converter &mdash; runs locally in your browser.</div>
+    </div>
+    <span class="badge-local">100% Offline &middot; Zero Uploads</span>
+  </header>
+
+  <div id="dropzone" class="dropzone" tabindex="0">
+    <strong>Drop .syx, .mid, or .repatch files here</strong>
+    <small>Supports single-patch dumps, 242+6 split JP-8080 dumps, 128-patch User Banks (U:A11&ndash;U:B88), Performances, Standard MIDI (.mid) dumps, and multiple Trancera .repatch files.</small>
+    <input id="fileInput" type="file" multiple accept=".syx,.mid,.midi,.repatch,.xml" class="hidden">
+    <button type="button" class="btn" id="pickBtn">Choose Files&hellip;</button>
+  </div>
+
+  <div class="tabs">
+    <button type="button" class="tab active" id="tabToRepatch">.syx / .mid &rarr; .repatch (<span id="syxCount">0</span>)</button>
+    <button type="button" class="tab" id="tabToSyx">.repatch &rarr; .syx (<span id="repCount">0</span>)</button>
+  </div>
+
+  <section id="paneToRepatch" class="card">
+    <div class="controls-row">
+      <div class="opts">
+        <label class="field">DAC Switch
+          <select id="optDac">
+            <option value="1" selected>On (Hardware DAC + Output)</option>
+            <option value="0">Off (Digital Direct)</option>
+          </select>
+        </label>
+        <label class="field">Device Version
+          <input id="optVersion" type="text" value="0.9.3d1" style="width:76px; font-family:var(--mono)">
+        </label>
+        <label class="field"><input id="optAllParts" type="checkbox"> Include Lower Perf Parts</label>
+        <label class="field"><input id="optLenient" type="checkbox"> Ignore Checksum Errors</label>
+      </div>
+      <div class="opts">
+        <button type="button" class="btn" id="clearSyxBtn" disabled>Clear</button>
+        <button type="button" class="btn btn-primary" id="downloadZipBtn" disabled>Download All (.zip)</button>
+      </div>
+    </div>
+    <div id="syxSummary" class="summary">Load a .syx or .mid file to decode JP-8000 / JP-8080 patches.</div>
+    <div id="syxTableWrap"></div>
+  </section>
+
+  <section id="paneToSyx" class="card hidden">
+    <div class="controls-row">
+      <div class="opts">
+        <label class="field">Hardware Format
+          <select id="optFormat">
+            <option value="jp8080" selected>JP-8080 (248B Split 242+6)</option>
+            <option value="jp8080-flat">JP-8080 (248B Flat)</option>
+            <option value="jp8000">JP-8000 (239B)</option>
+          </select>
+        </label>
+        <label class="field">Destination
+          <select id="optSlotMode">
+            <option value="auto" selected>Auto (Temp for 1, Bank for 2+)</option>
+            <option value="temp">Temp Upper (01 00 40 00)</option>
+            <option value="bank">User Bank (U:A11..U:B88)</option>
+          </select>
+        </label>
+        <label class="field">Device ID
+          <input id="optDevId" type="number" min="17" max="32" value="17" style="width:58px">
+        </label>
+      </div>
+      <div class="opts">
+        <button type="button" class="btn" id="clearRepBtn" disabled>Clear</button>
+        <button type="button" class="btn btn-amber" id="downloadSyxBtn" disabled>Download .syx</button>
+      </div>
+    </div>
+    <div id="repTableWrap"></div>
+    <div id="midiBar" class="midi-bar hidden">
+      <label class="field">MIDI Out Port
+        <select id="midiOutSelect"></select>
+      </label>
+      <button type="button" class="btn" id="sendMidiBtn" disabled>Send SysEx to Hardware</button>
+      <span id="midiStatus"></span>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // Exact copy of TranceraControls.h kControls[0..69]: [id, name, min, max, initial, steps]
+  const CONTROLS = [
+    ['osc1_wave', 'Osc 1 Wave', 0, 6, 0, 7],
+    ['osc1_ctrl1', 'Osc 1 Control 1', 0, 127, 0, 0],
+    ['osc1_ctrl2', 'Osc 1 Control 2', 0, 127, 0, 0],
+    ['osc2_wave', 'Osc 2 Wave', 0, 2, 1, 3],
+    ['osc2_sync', 'Osc 2 Sync', 0, 1, 0, 2],
+    ['osc2_range', 'Osc 2 Range', -25, 25, 0, 0],
+    ['osc2_fine', 'Osc 2 Fine', -50, 50, 0, 0],
+    ['osc2_width', 'Osc 2 Width', 0, 127, 0, 0],
+    ['osc2_pwm', 'Osc 2 PWM', 0, 127, 0, 0],
+    ['ring', 'Ring Mod', 0, 1, 0, 2],
+    ['xmod', 'Cross Mod', 0, 127, 0, 0],
+    ['balance', 'Osc Balance', -64, 63, -64, 0],
+    ['mod_destination', 'Mod Destination', 0, 2, 0, 3],
+    ['pitch_lfo', 'Pitch LFO', -64, 63, 0, 0],
+    ['pitch_env_depth', 'Pitch Env Depth', -64, 63, 0, 0],
+    ['pitch_env_attack', 'Pitch Env Attack', 0, 127, 0, 0],
+    ['pitch_env_decay', 'Pitch Env Decay', 0, 127, 40, 0],
+    ['filter_type', 'Filter Type', 0, 2, 2, 3],
+    ['filter_slope', 'Filter Slope', 0, 1, 1, 2],
+    ['cutoff', 'Cutoff', 0, 127, 127, 0],
+    ['resonance', 'Resonance', 0, 127, 0, 0],
+    ['key_follow', 'Key Follow', -64, 63, 0, 0],
+    ['filter_lfo', 'Filter LFO', -64, 63, 0, 0],
+    ['filter_env_depth', 'Filter Env Depth', -64, 63, 0, 0],
+    ['filter_attack', 'Filter Attack', 0, 127, 0, 0],
+    ['filter_decay', 'Filter Decay', 0, 127, 64, 0],
+    ['filter_sustain', 'Filter Sustain', 0, 127, 127, 0],
+    ['filter_release', 'Filter Release', 0, 127, 5, 0],
+    ['level', 'Amp Level', 0, 127, 100, 0],
+    ['amp_lfo', 'Amp LFO', -64, 63, 0, 0],
+    ['pan_mode', 'Pan Mode', 0, 2, 0, 3],
+    ['amp_attack', 'Amp Attack', 0, 127, 0, 0],
+    ['amp_decay', 'Amp Decay', 0, 127, 64, 0],
+    ['amp_sustain', 'Amp Sustain', 0, 127, 127, 0],
+    ['amp_release', 'Amp Release', 0, 127, 5, 0],
+    ['lfo1_wave', 'LFO 1 Wave', 0, 3, 0, 4],
+    ['lfo1_rate', 'LFO 1 Rate', 0, 127, 48, 0],
+    ['lfo1_fade', 'LFO 1 Fade', 0, 127, 0, 0],
+    ['lfo2_rate', 'LFO 2 Rate', 0, 127, 60, 0],
+    ['lfo2_pitch', 'LFO 2 Pitch', -64, 63, 8, 0],
+    ['lfo2_filter', 'LFO 2 Filter', -64, 63, 0, 0],
+    ['lfo2_amp', 'LFO 2 Amp', -64, 63, 0, 0],
+    ['bass', 'Tone Bass', -64, 63, 0, 0],
+    ['treble', 'Tone Treble', -64, 63, 0, 0],
+    ['chorus_type', 'Effect Type', 0, 11, 0, 12],
+    ['chorus_level', 'Effect Level', 0, 127, 0, 0],
+    ['delay_type', 'Delay Type', 0, 4, 0, 5],
+    ['delay_time', 'Delay Time', 0, 127, 64, 0],
+    ['delay_feedback', 'Delay Feedback', 0, 127, 40, 0],
+    ['delay_level', 'Delay Level', 0, 127, 0, 0],
+    ['mono', 'Mono', 0, 1, 0, 2],
+    ['legato', 'Legato', 0, 1, 0, 2],
+    ['portamento', 'Portamento', 0, 1, 0, 2],
+    ['portamento_time', 'Portamento Time', 0, 127, 11, 0],
+    ['osc_shift', 'Osc Shift', -2, 2, 0, 0],
+    ['bend_range', 'Bend Range', 0, 24, 2, 0],
+    ['velocity', 'Velocity', 0, 127, 0, 0],
+    ['unison', 'Unison', 0, 1, 0, 2],
+    ['unison_detune', 'Unison Detune', 0, 50, 12, 0],
+    ['arp', 'Arp', 0, 1, 0, 2],
+    ['arp_mode', 'Arp Mode', 0, 4, 0, 5],
+    ['arp_range', 'Arp Range', 0, 3, 0, 4],
+    ['arp_rate', 'Arp Rate', 0, 7, 5, 8],
+    ['arp_gate', 'Arp Gate', 10, 100, 75, 0],
+    ['arp_hold', 'Arp Hold', 0, 1, 0, 2],
+    ['filter_velocity', 'Filter Velocity', -64, 63, 0, 0],
+    ['aftertouch_cutoff', 'Aftertouch Cutoff', -64, 63, 0, 0],
+    ['aftertouch_lfo2', 'Aftertouch LFO 2', 0, 127, 0, 0],
+    ['unison_spread', 'Unison Spread', 0, 100, 0, 0],
+    ['delay_sync', 'Delay Sync', 0, 11, 0, 12]
+  ];
+  const CTRL_BY_ID = Object.fromEntries(CONTROLS.map((c, idx) => [c[0], { id: c[0], name: c[1], min: c[2], max: c[3], initial: c[4], steps: c[5], idx }]));
+  const WAVE1_NAMES = ['Super Saw', 'Tri Mod', 'Noise', 'Feedback', 'Square', 'Saw', 'Triangle'];
+  const KB_BYTES = 239, RACK_BYTES = 248, SPLIT_LIMIT = 242;
+  const VM_FIELDS = [
+    'lfo1Rate','lfo1Fade','lfo2Rate','xmod','balance','pitchLfo','pitchLfo2','pitchEnvDepth','pitchAttack','pitchDecay',
+    'osc1Ctrl1','osc1Ctrl2','osc2Range','osc2Fine','osc2Ctrl1','osc2Ctrl2','cutoff','resonance','keyFollow','filterLfo',
+    'filterLfo2','envDepth','filterAttack','filterDecay','filterSustain','filterRelease','level','ampLfo','ampLfo2',
+    'ampAttack','ampDecay','ampSustain','ampRelease','bass','treble','multiFx','delayTime','delayFeedback','delayLevel','portamento'
+  ];
+
+  const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+  const linearOffset = (hi, lo) => ((hi & 0x7f) << 7) | (lo & 0x7f);
+  const splitOffset = (off) => [(off >> 7) & 0x7f, off & 0x7f];
+  const computeChecksum = (arr, start, len) => {
+    let sum = 0;
+    for (let i = 0; i < len; i++) sum += arr[start + i] & 0x7f;
+    return (128 - (sum & 0x7f)) & 0x7f;
+  };
+  const verifyChecksum = (arr, start, len, sumByte) => {
+    let sum = sumByte & 0x7f;
+    for (let i = 0; i < len; i++) sum += arr[start + i] & 0x7f;
+    return (sum & 0x7f) === 0;
+  };
+  const decodeTwoByte = (msb, lsb, lo = -127, hi = 127) => clamp((((msb & 1) << 7) | (lsb & 0x7f)) - 127, lo, hi);
+  const encodeTwoByte = (out, off, val, lo = -127, hi = 127) => {
+    const raw = clamp(val, lo, hi) + 127;
+    out[off] = (raw >> 7) & 1;
+    out[off + 1] = raw & 0x7f;
+  };
+  function sanitizePatchName(name) {
+    let out = '';
+    for (let i = 0; i < name.length; i++) {
+      const ch = name.charCodeAt(i);
+      out += (ch >= 0x20 && ch <= 0x7d) ? name[i] : (ch >= 0x80 ? '?' : ' ');
+    }
+    out = out.replace(/ +$/, '');
+    if (!out) out = 'Untitled';
+    if (out.length > 16) out = out.slice(0, 16).replace(/ +$/, '');
+    return out || 'Untitled';
+  }
+  function sanitizeFilename(name) {
+    let out = '';
+    for (let i = 0; i < name.length; i++) {
+      const c = name[i], code = name.charCodeAt(i);
+      out += (code < 0x20 || '/\\:*?"<>|'.includes(c)) ? '_' : c;
+    }
+    out = out.replace(/^[ .]+|[ .]+$/g, '');
+    return out || 'Patch';
+  }
+  function defaultControls() {
+    const obj = {};
+    for (const c of CONTROLS) obj[c[0]] = c[4];
+    obj.bendDown = 2;
+    obj.velMatrix = null;
+    return obj;
+  }
+  function formatSlotLabel(kind, idx) {
+    const oct = (i) => { const c = clamp(i, 0, 63); return String(Math.floor(c / 8) + 1) + String((c % 8) + 1); };
+    if (kind === 'TempUpper') return 'Temp Upper';
+    if (kind === 'TempLower') return 'Temp Lower';
+    if (kind === 'UserPatch') { const c = clamp(idx, 0, 127); return 'U-' + (c < 64 ? 'A' : 'B') + oct(c & 63); }
+    if (kind === 'PerfUpper') return 'P-' + oct(idx) + ' Upper';
+    if (kind === 'PerfLower') return 'P-' + oct(idx) + ' Lower';
+    return 'Temp Upper';
+  }
+
+  function extractSysExFromMidi(bytes) {
+    if (bytes.length < 14 || bytes[0] !== 0x4d || bytes[1] !== 0x54 || bytes[2] !== 0x68 || bytes[3] !== 0x64) return bytes;
+    const u32 = (p) => ((bytes[p] << 24) >>> 0) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3];
+    const readVlq = (st, end) => {
+      let val = 0, cnt = 0;
+      while (st.pos < end && cnt < 4) {
+        const b = bytes[st.pos++]; cnt++;
+        val = (val << 7) | (b & 0x7f);
+        if ((b & 0x80) === 0) return val;
+      }
+      return null;
+    };
+    const out = [];
+    const st = { pos: 8 + u32(4) };
+    while (st.pos + 8 <= bytes.length) {
+      const isTrack = bytes[st.pos] === 0x4d && bytes[st.pos + 1] === 0x54 && bytes[st.pos + 2] === 0x72 && bytes[st.pos + 3] === 0x6b;
+      const chunkLen = u32(st.pos + 4);
+      st.pos += 8;
+      const chunkEnd = Math.min(bytes.length, st.pos + chunkLen);
+      if (isTrack) {
+        let running = 0, acc = [];
+        while (st.pos < chunkEnd) {
+          if (readVlq(st, chunkEnd) === null || st.pos >= chunkEnd) break;
+          const s = bytes[st.pos];
+          if (s === 0xf0 || s === 0xf7) {
+            st.pos++; running = 0;
+            const mlen = readVlq(st, chunkEnd);
+            if (mlen === null || st.pos + mlen > chunkEnd) break;
+            if (s === 0xf0) {
+              acc = [0xf0, ...bytes.slice(st.pos, st.pos + mlen)];
+              if (acc[acc.length - 1] === 0xf7) { out.push(...acc); acc = []; }
+            } else if (acc.length) {
+              acc.push(...bytes.slice(st.pos, st.pos + mlen));
+              if (acc[acc.length - 1] === 0xf7) { out.push(...acc); acc = []; }
+            }
+            st.pos += mlen;
+          } else if (s === 0xff) {
+            st.pos += 2; running = 0;
+            if (st.pos >= chunkEnd) break;
+            const mlen = readVlq(st, chunkEnd);
+            if (mlen === null || st.pos + mlen > chunkEnd) break;
+            st.pos += mlen;
+          } else if (s >= 0x80) {
+            st.pos++; running = s;
+            const hi = s & 0xf0;
+            st.pos = Math.min(chunkEnd, st.pos + (hi === 0xc0 || hi === 0xd0 ? 1 : 2));
+          } else {
+            if (running < 0x80) break;
+            const hi = running & 0xf0;
+            st.pos = Math.min(chunkEnd, st.pos + (hi === 0xc0 || hi === 0xd0 ? 1 : 2));
+          }
+        }
+      }
+      st.pos = chunkEnd;
+    }
+    return new Uint8Array(out);
+  }
+
+  function mapBeatToRate(pat) { return [0, 2, 3, 4, 5, 7][pat] ?? 5; }
+  function mapHwDelaySync(hw) { const t = [0, 3, 4, 5, 6, 7, 8, 9, 10, 10, 11]; return hw < 0 ? 0 : hw >= t.length ? 11 : t[hw]; }
+
+  function parseStream(rawBytes, strictChecksum = true) {
+    const data = extractSysExFromMidi(rawBytes);
+    const result = { patches: [], messagesParsed: 0, badChecksums: 0, ignoredMessages: 0 };
+    const slotMap = new Map();
+    const perfOverlays = new Map();
+    let orderCounter = 0;
+
+    let pos = 0;
+    while (pos < data.length) {
+      if (data[pos] !== 0xf0) { pos++; continue; }
+      const start = pos++;
+      while (pos < data.length && data[pos] !== 0xf7 && data[pos] !== 0xf0) pos++;
+      if (pos >= data.length || data[pos] !== 0xf7) { result.ignoredMessages++; continue; }
+      const end = pos + 1;
+      pos = end;
+      const len = end - start;
+      if (len < 13 || data[start + 1] !== 0x41 || data[start + 3] !== 0x00 || data[start + 4] !== 0x06 || data[start + 5] !== 0x12) {
+        result.ignoredMessages++; continue;
+      }
+      const dev = data[start + 2];
+      if (!((dev >= 0x10 && dev <= 0x1f) || dev === 0x7f)) { result.ignoredMessages++; continue; }
+      const okSum = verifyChecksum(data, start + 6, len - 8, data[end - 2]);
+      if (!okSum) {
+        result.badChecksums++;
+        if (strictChecksum) continue;
+      }
+      result.messagesParsed++;
+
+      const a3 = data[start + 6] & 0x7f, a2 = data[start + 7] & 0x7f, a1 = data[start + 8] & 0x7f, a0 = data[start + 9] & 0x7f;
+      const pStart = start + 10, pLen = len - 12;
+
+      const writeSlot = (kind, slotIndex, startOff) => {
+        const key = kind + ':' + slotIndex;
+        let buf = slotMap.get(key);
+        if (!buf) {
+          buf = { kind, slotIndex, bytes: new Uint8Array(RACK_BYTES), present: new Uint8Array(RACK_BYTES), checksumError: false, order: orderCounter++ };
+          slotMap.set(key, buf);
+        }
+        if (!okSum) buf.checksumError = true;
+        for (let k = 0; k < pLen; k++) {
+          const off = startOff + k;
+          if (off >= 0 && off < RACK_BYTES) {
+            buf.bytes[off] = data[pStart + k] & 0x7f;
+            buf.present[off] = 1;
+          }
+        }
+      };
+
+      const handlePerf = (perfKey) => {
+        let ov = perfOverlays.get(perfKey);
+        if (!ov) {
+          ov = { hasCommon: false, arpDest: 0, arpOn: false, arpMode: 0, arpBeat: 4, arpRange: 0, arpHold: false, hasUpSync: false, upSync: 0, hasLoSync: false, loSync: 0 };
+          perfOverlays.set(perfKey, ov);
+        }
+        if (a1 <= 0x01) {
+          ov.hasCommon = true;
+          const off0 = linearOffset(a1, a0);
+          for (let k = 0; k < pLen; k++) {
+            const v = data[pStart + k] & 0x7f, off = off0 + k;
+            if (off === 0x15) ov.arpDest = v;
+            else if (off === 0x17) ov.arpOn = v !== 0;
+            else if (off === 0x18) ov.arpMode = v;
+            else if (off === 0x19) ov.arpBeat = v;
+            else if (off === 0x1a) ov.arpRange = v;
+            else if (off === 0x1b) ov.arpHold = v !== 0;
+          }
+        } else if (a1 === 0x10 || a1 === 0x11) {
+          for (let k = 0; k < pLen; k++) {
+            if (a0 + k === 0x04) {
+              if (a1 === 0x11) { ov.hasLoSync = true; ov.loSync = data[pStart + k] & 0x7f; }
+              else { ov.hasUpSync = true; ov.upSync = data[pStart + k] & 0x7f; }
+            }
+          }
+        } else if ((a1 & 0xfe) === 0x40 || (a1 & 0xfe) === 0x42) {
+          const up = (a1 & 0xfe) === 0x40;
+          const kind = perfKey < 0 ? (up ? 'TempUpper' : 'TempLower') : (up ? 'PerfUpper' : 'PerfLower');
+          writeSlot(kind, perfKey < 0 ? 0 : perfKey, linearOffset(a1 & 1, a0));
+        }
+      };
+
+      if (a3 === 0x01 && a2 === 0x00) handlePerf(-1);
+      else if (a3 === 0x02 && a2 <= 0x01) writeSlot('UserPatch', a2 * 64 + ((a1 & 0x7e) >> 1), linearOffset(a1 & 1, a0));
+      else if (a3 === 0x03 && a2 <= 0x3f) handlePerf(a2);
+    }
+
+    const ordered = [...slotMap.values()].sort((a, b) => a.order - b.order);
+    for (const s of ordered) {
+      let hasSynth = false;
+      for (let i = 0x10; i < RACK_BYTES; i++) if (s.present[i]) { hasSynth = true; break; }
+      if (!hasSynth) continue;
+
+      let rackBytes = false;
+      for (let i = KB_BYTES; i < RACK_BYTES; i++) if (s.present[i]) { rackBytes = true; break; }
+
+      let nm = '';
+      for (let i = 0; i < 16; i++) {
+        if (s.present[i]) {
+          const ch = s.bytes[i];
+          nm += (ch >= 0x20 && ch <= 0x7d) ? String.fromCharCode(ch) : ' ';
+        } else nm += ' ';
+      }
+      nm = nm.replace(/ +$/, '') || 'Untitled';
+
+      const b = (off, fb = 0) => (off >= 0 && off < RACK_BYTES && s.present[off]) ? s.bytes[off] : fb;
+      const ctrl = defaultControls();
+      const warn = { osc2NoiseMappedToTriangle: false, distortionMappedToChorus: false, hasVelocityMatrix: false, checksumErrors: s.checksumError };
+
+      ctrl.lfo1_wave = clamp(b(0x10, 0), 0, 3);
+      ctrl.lfo1_rate = clamp(b(0x11, 48), 0, 127);
+      ctrl.lfo1_fade = clamp(b(0x12, 0), 0, 127);
+      ctrl.lfo2_rate = clamp(b(0x13, 60), 0, 127);
+      ctrl.ring = b(0x15, 0) ? 1 : 0;
+      ctrl.xmod = clamp(b(0x16, 0), 0, 127);
+      ctrl.balance = clamp(b(0x17, 0) - 64, -64, 63);
+      ctrl.mod_destination = clamp(b(0x18, 0), 0, 2);
+      ctrl.pitch_lfo = clamp(b(0x19, 64) - 64, -64, 63);
+      ctrl.lfo2_pitch = clamp(b(0x1a, 72) - 64, -64, 63);
+      ctrl.pitch_env_depth = clamp(b(0x1b, 64) - 64, -64, 63);
+      ctrl.pitch_env_attack = clamp(b(0x1c, 0), 0, 127);
+      ctrl.pitch_env_decay = clamp(b(0x1d, 40), 0, 127);
+      ctrl.osc1_wave = clamp(b(0x1e, 0), 0, 6);
+      ctrl.osc1_ctrl1 = clamp(b(0x1f, 0), 0, 127);
+      ctrl.osc1_ctrl2 = clamp(b(0x20, 0), 0, 127);
+
+      const rawW2 = clamp(b(0x21, 1), 0, 3);
+      if (rawW2 === 3) { ctrl.osc2_wave = 2; warn.osc2NoiseMappedToTriangle = true; rackBytes = true; }
+      else ctrl.osc2_wave = rawW2;
+      ctrl.osc2_sync = b(0x22, 0) ? 1 : 0;
+      ctrl.osc2_range = clamp(b(0x23, 25) - 25, -25, 25);
+      ctrl.osc2_fine = clamp(b(0x24, 50) - 50, -50, 50);
+      ctrl.osc2_width = clamp(b(0x25, 0), 0, 127);
+      ctrl.osc2_pwm = clamp(b(0x26, 0), 0, 127);
+
+      ctrl.filter_type = clamp(b(0x27, 2), 0, 2);
+      ctrl.filter_slope = b(0x28, 1) ? 1 : 0;
+      ctrl.cutoff = clamp(b(0x29, 127), 0, 127);
+      ctrl.resonance = clamp(b(0x2a, 0), 0, 127);
+      ctrl.key_follow = clamp(b(0x2b, 64) - 64, -64, 63);
+      ctrl.filter_lfo = clamp(b(0x2c, 64) - 64, -64, 63);
+      ctrl.lfo2_filter = clamp(b(0x2d, 64) - 64, -64, 63);
+      ctrl.filter_env_depth = clamp(b(0x2e, 64) - 64, -64, 63);
+      ctrl.filter_attack = clamp(b(0x2f, 0), 0, 127);
+      ctrl.filter_decay = clamp(b(0x30, 64), 0, 127);
+      ctrl.filter_sustain = clamp(b(0x31, 127), 0, 127);
+      ctrl.filter_release = clamp(b(0x32, 5), 0, 127);
+
+      ctrl.level = clamp(b(0x33, 100), 0, 127);
+      ctrl.amp_lfo = clamp(b(0x34, 64) - 64, -64, 63);
+      ctrl.lfo2_amp = clamp(b(0x35, 64) - 64, -64, 63);
+      ctrl.amp_attack = clamp(b(0x36, 0), 0, 127);
+      ctrl.amp_decay = clamp(b(0x37, 64), 0, 127);
+      ctrl.amp_sustain = clamp(b(0x38, 127), 0, 127);
+      ctrl.amp_release = clamp(b(0x39, 5), 0, 127);
+      ctrl.pan_mode = clamp(b(0x3a, 0), 0, 2);
+
+      ctrl.bass = clamp(b(0x3b, 64) - 64, -64, 63);
+      ctrl.treble = clamp(b(0x3c, 64) - 64, -64, 63);
+      const rawFx = clamp(b(0x3d, 0), 0, 12);
+      if (rawFx === 12) { ctrl.chorus_type = 0; warn.distortionMappedToChorus = true; rackBytes = true; }
+      else ctrl.chorus_type = rawFx;
+      ctrl.chorus_level = clamp(b(0x3e, 0), 0, 127);
+      ctrl.delay_type = clamp(b(0x3f, 0), 0, 4);
+      ctrl.delay_time = clamp(b(0x40, 64), 0, 127);
+      ctrl.delay_feedback = clamp(b(0x41, 40), 0, 127);
+      ctrl.delay_level = clamp(b(0x42, 0), 0, 127);
+
+      ctrl.bend_range = clamp(b(0x43, 2), 0, 24);
+      ctrl.bendDown = clamp(b(0x44, 2), 0, 24);
+      ctrl.portamento = b(0x45, 0) ? 1 : 0;
+      ctrl.portamento_time = clamp(b(0x46, 11), 0, 127);
+      ctrl.mono = b(0x47, 0) ? 1 : 0;
+      ctrl.legato = b(0x48, 0) ? 1 : 0;
+      ctrl.osc_shift = clamp(b(0x49, 2) - 2, -2, 2);
+
+      const velOn = b(linearOffset(0x01, 0x1b), 0) !== 0;
+      const vm = { on: velOn };
+      const vmBase = linearOffset(0x01, 0x1c);
+      for (let i = 0; i < VM_FIELDS.length; i++) {
+        const o = vmBase + i * 2;
+        const lo = i === 12 ? -50 : i === 13 ? -100 : -127;
+        const hi = i === 12 ? 50 : i === 13 ? 100 : 127;
+        vm[VM_FIELDS[i]] = (s.present[o] && s.present[o + 1]) ? decodeTwoByte(s.bytes[o], s.bytes[o + 1], lo, hi) : 0;
+      }
+      ctrl.velMatrix = vm;
+      warn.hasVelocityMatrix = velOn;
+
+      const uOn = linearOffset(0x01, 0x73), uDet = linearOffset(0x01, 0x74);
+      if (s.present[uOn]) ctrl.unison = s.bytes[uOn] ? 1 : 0;
+      if (s.present[uDet]) ctrl.unison_detune = clamp(s.bytes[uDet], 0, 50);
+
+      const ovKey = (s.kind === 'TempUpper' || s.kind === 'TempLower') ? -1 : (s.kind === 'PerfUpper' || s.kind === 'PerfLower' ? s.slotIndex : null);
+      const ov = ovKey !== null ? perfOverlays.get(ovKey) : null;
+      if (ov) {
+        const isLo = s.kind === 'TempLower' || s.kind === 'PerfLower';
+        if (ov.hasCommon) {
+          if (ov.arpOn && (isLo ? (ov.arpDest === 0 || ov.arpDest === 1) : (ov.arpDest === 0 || ov.arpDest === 2))) ctrl.arp = 1;
+          ctrl.arp_mode = clamp(ov.arpMode, 0, 4);
+          ctrl.arp_rate = mapBeatToRate(ov.arpBeat);
+          ctrl.arp_range = clamp(ov.arpRange, 0, 3);
+          ctrl.arp_hold = ov.arpHold ? 1 : 0;
+        }
+        if (isLo && ov.hasLoSync) ctrl.delay_sync = mapHwDelaySync(ov.loSync);
+        else if (!isLo && ov.hasUpSync) ctrl.delay_sync = mapHwDelaySync(ov.upSync);
+      }
+
+      result.patches.push({
+        ctrl,
+        name: nm,
+        slotKind: s.kind,
+        slotIndex: s.slotIndex,
+        detectedFormat: rackBytes ? 'JP-8080' : 'JP-8000',
+        warnings: warn
+      });
+    }
+    return result;
+  }
+
+  function bakeVelocityMatrix(ctrl) {
+    const out = { ...ctrl };
+    const vm = ctrl.velMatrix;
+    if (vm && vm.on) {
+      if (out.velocity === 0 && vm.level > 0) out.velocity = clamp(vm.level, 0, 127);
+      if (out.filter_velocity === 0 && vm.cutoff !== 0) out.filter_velocity = clamp(Math.round(vm.cutoff * 63 / 127), -64, 63);
+    }
+    return out;
+  }
+
+  function formatRepatchNum(c, val) {
+    const [id, , min, max, , steps] = c;
+    if (steps > 0) return String(val - min);
+    const norm = (val - min) / (max - min);
+    const rounded = Math.round(norm * 1e12) / 1e12;
+    let s = rounded.toFixed(12).replace(/0+$/, '').replace(/\.$/, '');
+    return (!s || s === '-0') ? '0' : s;
+  }
+
+  function encodeRepatchXml(rawCtrl, version, dacOn) {
+    const ctrl = bakeVelocityMatrix(rawCtrl);
+    const lines = [
+      '<?xml version="1.0"?>',
+      '<JukeboxPatch version="1.0">',
+      '  <DeviceNameInEnglish>Trancera Virtual Analog Synth</DeviceNameInEnglish>',
+      `  <Properties deviceProductID="cz.protocodus.Trancera" deviceVersion="${version}">`,
+      '    <Object name="custom_properties">'
+    ];
+    for (const c of CONTROLS) {
+      lines.push(`      <Value property="${c[0]}" type="number">${formatRepatchNum(c, ctrl[c[0]])}</Value>`);
+    }
+    lines.push(`      <Value property="analog_color" type="number">${dacOn ? '1' : '0'}</Value>`);
+    lines.push('    </Object>', '  </Properties>', '</JukeboxPatch>', '');
+    return lines.join('\n');
+  }
+
+  function decodeRepatchXml(xmlText) {
+    const ctrl = defaultControls();
+    let matched = 0;
+    const re = /<Value\b([^>]*)>([\s\S]*?)<\/Value>/g;
+    let m;
+    while ((m = re.exec(xmlText)) !== null) {
+      const attrs = m[1], inner = m[2].trim();
+      const pm = /\bproperty="([^"]*)"/.exec(attrs);
+      const tm = /\btype="([^"]*)"/.exec(attrs);
+      if (!pm || (tm && tm[1] !== 'number')) continue;
+      const spec = CTRL_BY_ID[pm[1]];
+      if (!spec) continue;
+      const num = Number(inner);
+      if (!Number.isFinite(num)) continue;
+      ctrl[spec.id] = spec.steps > 0
+        ? spec.min + Math.floor(clamp(num, 0, spec.steps - 1) + 0.5)
+        : spec.min + Math.floor(clamp(num, 0, 1) * (spec.max - spec.min) + 0.5);
+      ctrl.bendDown = ctrl.bend_range;
+      matched++;
+    }
+    return matched > 0 ? ctrl : null;
+  }
+
+  function writePatchBytes(ctrl, name, is8080) {
+    const total = is8080 ? RACK_BYTES : KB_BYTES;
+    const out = new Uint8Array(total);
+    const clean = sanitizePatchName(name);
+    for (let i = 0; i < 16; i++) out[i] = i < clean.length ? clean.charCodeAt(i) : 0x20;
+    out[0x10] = clamp(ctrl.lfo1_wave, 0, 3);
+    out[0x11] = clamp(ctrl.lfo1_rate, 0, 127);
+    out[0x12] = clamp(ctrl.lfo1_fade, 0, 127);
+    out[0x13] = clamp(ctrl.lfo2_rate, 0, 127);
+    out[0x14] = 0;
+    out[0x15] = ctrl.ring ? 1 : 0;
+    out[0x16] = clamp(ctrl.xmod, 0, 127);
+    out[0x17] = clamp(ctrl.balance + 64, 0, 127);
+    out[0x18] = clamp(ctrl.mod_destination, 0, 2);
+    out[0x19] = clamp(ctrl.pitch_lfo + 64, 0, 127);
+    out[0x1a] = clamp(ctrl.lfo2_pitch + 64, 0, 127);
+    out[0x1b] = clamp(ctrl.pitch_env_depth + 64, 0, 127);
+    out[0x1c] = clamp(ctrl.pitch_env_attack, 0, 127);
+    out[0x1d] = clamp(ctrl.pitch_env_decay, 0, 127);
+    out[0x1e] = clamp(ctrl.osc1_wave, 0, 6);
+    out[0x1f] = clamp(ctrl.osc1_ctrl1, 0, 127);
+    out[0x20] = clamp(ctrl.osc1_ctrl2, 0, 127);
+    out[0x21] = clamp(ctrl.osc2_wave, 0, 2);
+    out[0x22] = ctrl.osc2_sync ? 1 : 0;
+    out[0x23] = clamp(ctrl.osc2_range + 25, 0, 50);
+    out[0x24] = clamp(ctrl.osc2_fine + 50, 0, 100);
+    out[0x25] = clamp(ctrl.osc2_width, 0, 127);
+    out[0x26] = clamp(ctrl.osc2_pwm, 0, 127);
+    out[0x27] = clamp(ctrl.filter_type, 0, 2);
+    out[0x28] = ctrl.filter_slope ? 1 : 0;
+    out[0x29] = clamp(ctrl.cutoff, 0, 127);
+    out[0x2a] = clamp(ctrl.resonance, 0, 127);
+    out[0x2b] = clamp(ctrl.key_follow + 64, 0, 127);
+    out[0x2c] = clamp(ctrl.filter_lfo + 64, 0, 127);
+    out[0x2d] = clamp(ctrl.lfo2_filter + 64, 0, 127);
+    out[0x2e] = clamp(ctrl.filter_env_depth + 64, 0, 127);
+    out[0x2f] = clamp(ctrl.filter_attack, 0, 127);
+    out[0x30] = clamp(ctrl.filter_decay, 0, 127);
+    out[0x31] = clamp(ctrl.filter_sustain, 0, 127);
+    out[0x32] = clamp(ctrl.filter_release, 0, 127);
+    out[0x33] = clamp(ctrl.level, 0, 127);
+    out[0x34] = clamp(ctrl.amp_lfo + 64, 0, 127);
+    out[0x35] = clamp(ctrl.lfo2_amp + 64, 0, 127);
+    out[0x36] = clamp(ctrl.amp_attack, 0, 127);
+    out[0x37] = clamp(ctrl.amp_decay, 0, 127);
+    out[0x38] = clamp(ctrl.amp_sustain, 0, 127);
+    out[0x39] = clamp(ctrl.amp_release, 0, 127);
+    out[0x3a] = clamp(ctrl.pan_mode, 0, 2);
+    out[0x3b] = clamp(ctrl.bass + 64, 0, 127);
+    out[0x3c] = clamp(ctrl.treble + 64, 0, 127);
+    out[0x3d] = clamp(ctrl.chorus_type, 0, 11);
+    out[0x3e] = clamp(ctrl.chorus_level, 0, 127);
+    out[0x3f] = clamp(ctrl.delay_type, 0, 4);
+    out[0x40] = clamp(ctrl.delay_time, 0, 127);
+    out[0x41] = clamp(ctrl.delay_feedback, 0, 127);
+    out[0x42] = clamp(ctrl.delay_level, 0, 127);
+    out[0x43] = clamp(ctrl.bend_range, 0, 24);
+    out[0x44] = clamp(ctrl.bendDown ?? ctrl.bend_range, 0, 24);
+    out[0x45] = ctrl.portamento ? 1 : 0;
+    out[0x46] = clamp(ctrl.portamento_time, 0, 127);
+    out[0x47] = ctrl.mono ? 1 : 0;
+    out[0x48] = ctrl.legato ? 1 : 0;
+    out[0x49] = clamp(ctrl.osc_shift + 2, 0, 4);
+
+    for (let i = 0; i < 39; i++) encodeTwoByte(out, 74 + i * 2, 0);
+    out[linearOffset(0x01, 0x18)] = 0;
+    encodeTwoByte(out, linearOffset(0x01, 0x19), 0);
+
+    const vm = ctrl.velMatrix ? { ...ctrl.velMatrix } : { on: false };
+    if (!vm.on && (ctrl.velocity > 0 || ctrl.filter_velocity !== 0)) {
+      vm.on = true;
+      if (ctrl.velocity > 0) vm.level = clamp(ctrl.velocity, 0, 127);
+      if (ctrl.filter_velocity !== 0) vm.cutoff = clamp(Math.round(ctrl.filter_velocity * 127 / 63), -127, 127);
+    }
+    out[linearOffset(0x01, 0x1b)] = vm.on ? 1 : 0;
+    const vmBase = linearOffset(0x01, 0x1c);
+    for (let i = 0; i < VM_FIELDS.length; i++) {
+      const lo = i === 12 ? -50 : i === 13 ? -100 : -127;
+      const hi = i === 12 ? 50 : i === 13 ? 100 : 127;
+      encodeTwoByte(out, vmBase + i * 2, vm[VM_FIELDS[i]] || 0, lo, hi);
+    }
+    out[linearOffset(0x01, 0x6c)] = 0;
+    out[linearOffset(0x01, 0x6d)] = vm.on ? 1 : 0;
+    out[linearOffset(0x01, 0x6e)] = 0;
+    if (is8080) {
+      out[linearOffset(0x01, 0x73)] = ctrl.unison ? 1 : 0;
+      out[linearOffset(0x01, 0x74)] = clamp(ctrl.unison_detune, 0, 50);
+    }
+    return out;
+  }
+
+  function makeDt1Packet(devByte, addr4, payload, pStart, pLen) {
+    const pkt = new Uint8Array(6 + 4 + pLen + 2);
+    pkt[0] = 0xf0; pkt[1] = 0x41; pkt[2] = devByte; pkt[3] = 0x00; pkt[4] = 0x06; pkt[5] = 0x12;
+    for (let i = 0; i < 4; i++) pkt[6 + i] = addr4[i] & 0x7f;
+    for (let i = 0; i < pLen; i++) pkt[10 + i] = payload[pStart + i] & 0x7f;
+    pkt[10 + pLen] = computeChecksum(pkt, 6, 4 + pLen);
+    pkt[11 + pLen] = 0xf7;
+    return pkt;
+  }
+
+  function encodePatch(ctrl, name, { is8080 = true, slot = 'temp', slotIndex = 0, devByte = 0x10, hardwareSplit = true } = {}) {
+    const payload = writePatchBytes(ctrl, name, is8080);
+    const addr = slot === 'bank'
+      ? [0x02, slotIndex < 64 ? 0x00 : 0x01, (slotIndex & 63) * 2, 0x00]
+      : [0x01, 0x00, 0x40, 0x00];
+    if (hardwareSplit && payload.length > SPLIT_LIMIT) {
+      const p1 = makeDt1Packet(devByte, addr, payload, 0, SPLIT_LIMIT);
+      const [hi, lo] = splitOffset(SPLIT_LIMIT);
+      const p2 = makeDt1Packet(devByte, [addr[0], addr[1], addr[2] + hi, lo], payload, SPLIT_LIMIT, payload.length - SPLIT_LIMIT);
+      const both = new Uint8Array(p1.length + p2.length);
+      both.set(p1, 0); both.set(p2, p1.length);
+      return [p1, p2];
+    }
+    return [makeDt1Packet(devByte, addr, payload, 0, payload.length)];
+  }
+
+  // Zero-dependency IEEE CRC-32 & uncompressed Store ZIP generator
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let j = 0; j < 8; j++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      t[i] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32(bytes) {
+    let c = 0xffffffff;
+    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  function buildZip(files) {
+    const enc = new TextEncoder();
+    const parts = [], central = [];
+    let offset = 0;
+    for (const f of files) {
+      const nb = enc.encode(f.name), db = enc.encode(f.content), crc = crc32(db);
+      const lfh = new Uint8Array(30 + nb.length);
+      const lv = new DataView(lfh.buffer);
+      lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true); lv.setUint16(6, 0x0800, true);
+      lv.setUint32(14, crc, true); lv.setUint32(18, db.length, true); lv.setUint32(22, db.length, true);
+      lv.setUint16(26, nb.length, true);
+      lfh.set(nb, 30);
+      parts.push(lfh, db);
+
+      const cdh = new Uint8Array(46 + nb.length);
+      const cv = new DataView(cdh.buffer);
+      cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true); cv.setUint16(8, 0x0800, true);
+      cv.setUint32(16, crc, true); cv.setUint32(20, db.length, true); cv.setUint32(24, db.length, true);
+      cv.setUint16(28, nb.length, true); cv.setUint32(42, offset, true);
+      cdh.set(nb, 46);
+      central.push(cdh);
+      offset += lfh.length + db.length;
+    }
+    const cdSize = central.reduce((a, b) => a + b.length, 0);
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+    ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, eocd], { type: 'application/zip' });
+  }
+
+  function triggerDownload(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+
+  // Expose codec API cleanly on window for automated parity verification and browser DOM UI
+  window.TranceraSysExCodec = {
+    CONTROLS, parseStream, encodeRepatchXml, decodeRepatchXml, encodePatch, writePatchBytes, sanitizePatchName, formatSlotLabel
+  };
+
+  // ---- UI wiring -----------------------------------------------------------
+  const state = { rawSyxFiles: [], parsed: null, repatchQueue: [], expandedIdx: -1, midiAccess: null };
+  const $ = (id) => document.getElementById(id);
+
+  function switchTab(which) {
+    const isToRep = which === 'to-repatch';
+    $('tabToRepatch').classList.toggle('active', isToRep);
+    $('tabToSyx').classList.toggle('active', !isToRep);
+    $('paneToRepatch').classList.toggle('hidden', !isToRep);
+    $('paneToSyx').classList.toggle('hidden', isToRep);
+  }
+  $('tabToRepatch').onclick = () => switchTab('to-repatch');
+  $('tabToSyx').onclick = () => switchTab('to-syx');
+
+  function reparseSyx() {
+    if (!state.rawSyxFiles.length) { state.parsed = null; renderSyxTable(); return; }
+    const strict = !$('optLenient').checked;
+    const combined = { patches: [], messagesParsed: 0, badChecksums: 0, ignoredMessages: 0 };
+    for (const f of state.rawSyxFiles) {
+      const r = parseStream(f.bytes, strict);
+      combined.patches.push(...r.patches);
+      combined.messagesParsed += r.messagesParsed;
+      combined.badChecksums += r.badChecksums;
+      combined.ignoredMessages += r.ignoredMessages;
+    }
+    state.parsed = combined;
+    state.expandedIdx = -1;
+    renderSyxTable();
+  }
+
+  function selectedSyxPatches() {
+    if (!state.parsed) return [];
+    const allParts = $('optAllParts').checked;
+    const hasUp = state.parsed.patches.some(p => p.slotKind !== 'TempLower' && p.slotKind !== 'PerfLower');
+    return state.parsed.patches.filter(p => !(hasUp && !allParts && (p.slotKind === 'TempLower' || p.slotKind === 'PerfLower')));
+  }
+
+  function renderSyxTable() {
+    const list = selectedSyxPatches();
+    $('syxCount').textContent = list.length;
+    $('clearSyxBtn').disabled = !state.rawSyxFiles.length;
+    $('downloadZipBtn').disabled = !list.length;
+    if (!state.parsed) {
+      $('syxSummary').textContent = 'Load a .syx or .mid file to decode JP-8000 / JP-8080 patches.';
+      $('syxTableWrap').innerHTML = '<div class="empty">No SysEx patches loaded yet.</div>';
+      return;
+    }
+    const r = state.parsed;
+    $('syxSummary').innerHTML =
+      `<span class="pill pill-teal">${list.length} patch(es)</span>` +
+      `<span class="pill">${r.messagesParsed} packet(s)</span>` +
+      (r.badChecksums ? `<span class="pill pill-err">${r.badChecksums} bad checksum(s)</span>` : '');
+    if (!list.length) {
+      $('syxTableWrap').innerHTML = '<div class="empty">No JP-8000 / JP-8080 patch messages found in dropped file(s).</div>';
+      return;
+    }
+    const rows = list.map((rec, i) => {
+      const w = rec.warnings;
+      const badges = [
+        `<span class="pill">${rec.detectedFormat}</span>`,
+        w.hasVelocityMatrix ? '<span class="pill pill-teal">VelMatrix</span>' : '',
+        w.osc2NoiseMappedToTriangle ? '<span class="pill pill-warn">Osc2 Noise&rarr;Tri</span>' : '',
+        w.distortionMappedToChorus ? '<span class="pill pill-warn">FX Dist&rarr;Chorus</span>' : '',
+        w.checksumErrors ? '<span class="pill pill-err">Checksum</span>' : ''
+      ].join(' ');
+      const c = rec.ctrl;
+      const toneSummary = `${WAVE1_NAMES[c.osc1_wave]} | Cut ${c.cutoff} Res ${c.resonance}${c.unison ? ' | Unison' : ''}`;
+      let html = `<tr>
+        <td><span class="pill">${formatSlotLabel(rec.slotKind, rec.slotIndex)}</span></td>
+        <td><input type="text" class="name-edit" maxlength="16" data-syx-name="${i}" value="${rec.name.replace(/"/g, '&quot;')}"></td>
+        <td style="color:var(--muted);font-size:12px">${toneSummary}</td>
+        <td>${badges}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button type="button" class="btn" data-inspect="${i}">${state.expandedIdx === i ? 'Hide' : 'Params'}</button>
+          <button type="button" class="btn btn-primary" data-dl-rep="${i}">.repatch</button>
+        </td>
+      </tr>`;
+      if (state.expandedIdx === i) {
+        const baked = bakeVelocityMatrix(c);
+        const grid = CONTROLS.map(spec => `<div class="param-item"><span>${spec[0]}</span><span>${baked[spec[0]]}</span></div>`).join('');
+        html += `<tr class="details-row"><td colspan="5"><div class="param-grid">${grid}</div></td></tr>`;
+      }
+      return html;
+    }).join('');
+    $('syxTableWrap').innerHTML = `<table><thead><tr><th>Slot</th><th>Name</th><th>Summary</th><th>Notes</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+
+    $('syxTableWrap').querySelectorAll('[data-syx-name]').forEach(inp => {
+      inp.oninput = () => { list[Number(inp.dataset.syxName)].name = inp.value; };
+    });
+    $('syxTableWrap').querySelectorAll('[data-inspect]').forEach(btn => {
+      btn.onclick = () => { const idx = Number(btn.dataset.inspect); state.expandedIdx = state.expandedIdx === idx ? -1 : idx; renderSyxTable(); };
+    });
+    $('syxTableWrap').querySelectorAll('[data-dl-rep]').forEach(btn => {
+      btn.onclick = () => {
+        const rec = list[Number(btn.dataset.dlRep)];
+        const xml = encodeRepatchXml(rec.ctrl, $('optVersion').value.trim() || '0.9.3d1', $('optDac').value === '1');
+        triggerDownload(new Blob([xml], { type: 'application/xml' }), sanitizeFilename(rec.name) + '.repatch');
+      };
+    });
+  }
+
+  function renderRepTable() {
+    const q = state.repatchQueue;
+    $('repCount').textContent = q.length;
+    $('clearRepBtn').disabled = !q.length;
+    $('downloadSyxBtn').disabled = !q.length;
+    if ($('sendMidiBtn')) $('sendMidiBtn').disabled = !q.length || !($('midiOutSelect')?.value);
+    if (!q.length) {
+      $('repTableWrap').innerHTML = '<div class="empty">Drop one or more Reason Trancera .repatch files to convert them to .syx.</div>';
+      return;
+    }
+    const mode = $('optSlotMode').value;
+    const isBank = mode === 'bank' || (mode === 'auto' && q.length > 1);
+    const rows = q.map((item, i) => {
+      const slot = isBank ? formatSlotLabel('UserPatch', Math.min(i, 127)) : (i === 0 ? 'Temp Upper' : 'Skipped');
+      const c = item.ctrl;
+      return `<tr>
+        <td><span class="pill">${slot}</span></td>
+        <td><input type="text" class="name-edit" maxlength="16" data-rep-name="${i}" value="${item.name.replace(/"/g, '&quot;')}"></td>
+        <td style="color:var(--muted);font-size:12px">${WAVE1_NAMES[c.osc1_wave]} | Cut ${c.cutoff} Res ${c.resonance}</td>
+        <td style="text-align:right;white-space:nowrap">
+          <button type="button" class="btn" data-up="${i}" ${i === 0 ? 'disabled' : ''}>&uarr;</button>
+          <button type="button" class="btn" data-dn="${i}" ${i === q.length - 1 ? 'disabled' : ''}>&darr;</button>
+          <button type="button" class="btn" data-rm="${i}">Remove</button>
+        </td>
+      </tr>`;
+    }).join('');
+    $('repTableWrap').innerHTML = `<table><thead><tr><th>Target Slot</th><th>SysEx Name (16 ASCII)</th><th>Voice</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+
+    $('repTableWrap').querySelectorAll('[data-rep-name]').forEach(inp => {
+      inp.oninput = () => { q[Number(inp.dataset.repName)].name = inp.value; };
+    });
+    $('repTableWrap').querySelectorAll('[data-up]').forEach(btn => {
+      btn.onclick = () => { const i = Number(btn.dataset.up); [q[i - 1], q[i]] = [q[i], q[i - 1]]; renderRepTable(); };
+    });
+    $('repTableWrap').querySelectorAll('[data-dn]').forEach(btn => {
+      btn.onclick = () => { const i = Number(btn.dataset.dn); [q[i], q[i + 1]] = [q[i + 1], q[i]]; renderRepTable(); };
+    });
+    $('repTableWrap').querySelectorAll('[data-rm]').forEach(btn => {
+      btn.onclick = () => { q.splice(Number(btn.dataset.rm), 1); renderRepTable(); };
+    });
+  }
+
+  function buildExportPackets() {
+    const q = state.repatchQueue;
+    const fmt = $('optFormat').value;
+    const is8080 = fmt !== 'jp8000';
+    const hardwareSplit = fmt === 'jp8080';
+    const rawDev = clamp(Number($('optDevId').value) || 17, 17, 32);
+    const devByte = 0x10 + (rawDev - 17);
+    const mode = $('optSlotMode').value;
+    const isBank = mode === 'bank' || (mode === 'auto' && q.length > 1);
+    const packets = [];
+    if (!isBank) {
+      packets.push(...encodePatch(q[0].ctrl, q[0].name, { is8080, slot: 'temp', slotIndex: 0, devByte, hardwareSplit }));
+    } else {
+      const limit = Math.min(q.length, 128);
+      for (let i = 0; i < limit; i++) {
+        packets.push(...encodePatch(q[i].ctrl, q[i].name, { is8080, slot: 'bank', slotIndex: i, devByte, hardwareSplit }));
+      }
+    }
+    return packets;
+  }
+
+  $('downloadZipBtn').onclick = () => {
+    const list = selectedSyxPatches();
+    if (!list.length) return;
+    const ver = $('optVersion').value.trim() || '0.9.3d1';
+    const dacOn = $('optDac').value === '1';
+    const used = new Map();
+    const files = list.map(rec => {
+      let base = sanitizeFilename(rec.name);
+      if (rec.slotKind === 'TempLower' || rec.slotKind === 'PerfLower') base += ` (${formatSlotLabel(rec.slotKind, rec.slotIndex)})`;
+      const n = (used.get(base) || 0) + 1;
+      used.set(base, n);
+      const fname = n > 1 ? `${base} (${formatSlotLabel(rec.slotKind, rec.slotIndex)}_${n}).repatch` : `${base}.repatch`;
+      return { name: fname, content: encodeRepatchXml(rec.ctrl, ver, dacOn) };
+    });
+    const first = state.rawSyxFiles[0]?.name.replace(/\.[^.]+$/, '') || 'trancera-patches';
+    triggerDownload(buildZip(files), sanitizeFilename(first) + '-repatch.zip');
+  };
+
+  $('downloadSyxBtn').onclick = () => {
+    if (!state.repatchQueue.length) return;
+    const packets = buildExportPackets();
+    const total = packets.reduce((a, p) => a + p.length, 0);
+    const merged = new Uint8Array(total);
+    let off = 0;
+    for (const p of packets) { merged.set(p, off); off += p.length; }
+    const name = state.repatchQueue.length === 1 ? sanitizeFilename(state.repatchQueue[0].name) + '.syx' : 'Trancera-UserBank.syx';
+    triggerDownload(new Blob([merged], { type: 'application/octet-stream' }), name);
+  };
+
+  $('clearSyxBtn').onclick = () => { state.rawSyxFiles = []; reparseSyx(); };
+  $('clearRepBtn').onclick = () => { state.repatchQueue = []; renderRepTable(); };
+  $('optLenient').onchange = reparseSyx;
+  $('optAllParts').onchange = renderSyxTable;
+  $('optSlotMode').onchange = renderRepTable;
+
+  async function handleFiles(fileList) {
+    let loadedSyx = false, loadedRep = false;
+    for (const file of fileList) {
+      const lower = file.name.toLowerCase();
+      if (lower.endsWith('.repatch') || lower.endsWith('.xml')) {
+        const text = await file.text();
+        const ctrl = decodeRepatchXml(text);
+        if (ctrl) {
+          state.repatchQueue.push({ name: sanitizePatchName(file.name.replace(/\.[^.]+$/, '')), ctrl });
+          loadedRep = true;
+        }
+      } else {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        state.rawSyxFiles.push({ name: file.name, bytes: buf });
+        loadedSyx = true;
+      }
+    }
+    if (loadedSyx) reparseSyx();
+    if (loadedRep) renderRepTable();
+    if (loadedRep && !loadedSyx) switchTab('to-syx');
+    else if (loadedSyx) switchTab('to-repatch');
+  }
+
+  $('pickBtn').onclick = () => $('fileInput').click();
+  $('dropzone').onclick = (e) => { if (e.target === $('dropzone')) $('fileInput').click(); };
+  $('fileInput').onchange = (e) => { if (e.target.files?.length) handleFiles(e.target.files); $('fileInput').value = ''; };
+  $('dropzone').ondragover = (e) => { e.preventDefault(); $('dropzone').classList.add('drag'); };
+  $('dropzone').ondragleave = () => $('dropzone').classList.remove('drag');
+  $('dropzone').ondrop = (e) => { e.preventDefault(); $('dropzone').classList.remove('drag'); if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files); };
+
+  // Optional Web MIDI SysEx TX when supported by browser
+  if (typeof navigator !== 'undefined' && navigator.requestMIDIAccess) {
+    navigator.requestMIDIAccess({ sysex: true }).then(access => {
+      state.midiAccess = access;
+      $('midiBar').classList.remove('hidden');
+      const refreshPorts = () => {
+        const sel = $('midiOutSelect');
+        const prev = sel.value;
+        sel.innerHTML = '';
+        for (const out of access.outputs.values()) {
+          const opt = document.createElement('option');
+          opt.value = out.id; opt.textContent = out.name || out.id;
+          sel.appendChild(opt);
+        }
+        if (prev) sel.value = prev;
+        $('sendMidiBtn').disabled = !state.repatchQueue.length || !sel.value;
+      };
+      refreshPorts();
+      access.onstatechange = refreshPorts;
+      $('sendMidiBtn').onclick = async () => {
+        const port = access.outputs.get($('midiOutSelect').value);
+        if (!port || !state.repatchQueue.length) return;
+        const pkts = buildExportPackets();
+        $('sendMidiBtn').disabled = true;
+        for (let i = 0; i < pkts.length; i++) {
+          port.send(pkts[i]);
+          if (i + 1 < pkts.length) await new Promise(r => setTimeout(r, 25));
+        }
+        $('sendMidiBtn').disabled = false;
+        $('midiStatus').textContent = `Sent ${pkts.length} SysEx packet(s) to ${port.name}.`;
+      };
+    }).catch(() => {});
+  }
+
+  renderSyxTable();
+  renderRepTable();
+})();
+</script>
+</body>
+</html>
