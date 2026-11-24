@@ -221,7 +221,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
           </select>
         </label>
         <label class="field">Device Version
-          <input id="optVersion" type="text" value="0.9.3d1" style="width:76px; font-family:var(--mono)">
+          <input id="optVersion" type="text" value="0.9.4d1" style="width:76px; font-family:var(--mono)">
         </label>
         <label class="field"><input id="optAllParts" type="checkbox"> Include Lower Perf Parts</label>
         <label class="field"><input id="optLenient" type="checkbox"> Ignore Checksum Errors</label>
@@ -322,7 +322,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
     ['lfo2_amp', 'LFO 2 Amp', -64, 63, 0, 0],
     ['bass', 'Tone Bass', -64, 63, 0, 0],
     ['treble', 'Tone Treble', -64, 63, 0, 0],
-    ['chorus_type', 'Effect Type', 0, 11, 0, 12],
+    ['chorus_type', 'Effect Type', 0, 12, 0, 13],
     ['chorus_level', 'Effect Level', 0, 127, 0, 0],
     ['delay_type', 'Delay Type', 0, 4, 0, 5],
     ['delay_time', 'Delay Time', 0, 127, 64, 0],
@@ -634,8 +634,8 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
       ctrl.bass = clamp(b(0x3b, 64) - 64, -64, 63);
       ctrl.treble = clamp(b(0x3c, 64) - 64, -64, 63);
       const rawFx = clamp(b(0x3d, 0), 0, 12);
-      if (rawFx === 12) { ctrl.chorus_type = 0; warn.distortionMappedToChorus = true; rackBytes = true; }
-      else ctrl.chorus_type = rawFx;
+      ctrl.chorus_type = rawFx;
+      if (rawFx === 12) rackBytes = true;
       ctrl.chorus_level = clamp(b(0x3e, 0), 0, 127);
       ctrl.delay_type = clamp(b(0x3f, 0), 0, 4);
       ctrl.delay_time = clamp(b(0x40, 64), 0, 127);
@@ -802,7 +802,8 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
     out[0x3a] = clamp(ctrl.pan_mode, 0, 2);
     out[0x3b] = clamp(ctrl.bass + 64, 0, 127);
     out[0x3c] = clamp(ctrl.treble + 64, 0, 127);
-    out[0x3d] = clamp(ctrl.chorus_type, 0, 11);
+    const fxType = clamp(ctrl.chorus_type, 0, 12);
+    out[0x3d] = !is8080 && fxType === 12 ? 0 : fxType;
     out[0x3e] = clamp(ctrl.chorus_level, 0, 127);
     out[0x3f] = clamp(ctrl.delay_type, 0, 4);
     out[0x40] = clamp(ctrl.delay_time, 0, 127);
@@ -1025,7 +1026,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
     $('syxTableWrap').querySelectorAll('[data-dl-rep]').forEach(btn => {
       btn.onclick = () => {
         const rec = list[Number(btn.dataset.dlRep)];
-        const xml = encodeRepatchXml(rec.ctrl, $('optVersion').value.trim() || '0.9.3d1', $('optDac').value === '1');
+        const xml = encodeRepatchXml(rec.ctrl, $('optVersion').value.trim() || '0.9.4d1', $('optDac').value === '1');
         triggerDownload(new Blob([xml], { type: 'application/xml' }), sanitizeFilename(rec.name) + '.repatch');
       };
     });
@@ -1097,7 +1098,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
   $('downloadZipBtn').onclick = () => {
     const list = selectedSyxPatches();
     if (!list.length) return;
-    const ver = $('optVersion').value.trim() || '0.9.3d1';
+    const ver = $('optVersion').value.trim() || '0.9.4d1';
     const dacOn = $('optDac').value === '1';
     const used = new Map();
     const files = list.map(rec => {

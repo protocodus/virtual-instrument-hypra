@@ -242,16 +242,9 @@ PatchRecord decodeSlotBuffer (const RawSlotBuffer& slot, const PerfOverlay* over
     p.effects.bass = clampByte (b (0x3B, 64) - 64, -64, 63);
     p.effects.treble = clampByte (b (0x3C, 64) - 64, -64, 63);
     const int rawFxType = clampByte (b (0x3D, 0), 0, 12);
+    p.effects.chorusType = static_cast<ChorusType> (rawFxType);
     if (rawFxType == 12)
-    {
-        p.effects.chorusType = ChorusType::SuperSlow;
-        rec.warnings.distortionMappedToChorus = true;
         hasRackBytes = true;
-    }
-    else
-    {
-        p.effects.chorusType = static_cast<ChorusType> (rawFxType);
-    }
     p.effects.chorus = clampByte (b (0x3E, 0), 0, 127);
 
     p.effects.delayType = static_cast<DelayType> (clampByte (b (0x3F, 0), 0, 4));
@@ -614,7 +607,8 @@ std::size_t writePatchBytes (const Patch& patch, std::string_view name, Format f
 
     out[0x3B] = static_cast<std::uint8_t> (clampByte (patch.effects.bass + 64, 0, 127));
     out[0x3C] = static_cast<std::uint8_t> (clampByte (patch.effects.treble + 64, 0, 127));
-    out[0x3D] = static_cast<std::uint8_t> (clampByte (static_cast<int> (patch.effects.chorusType), 0, 11));
+    const int fxType = clampByte (static_cast<int> (patch.effects.chorusType), 0, 12);
+    out[0x3D] = static_cast<std::uint8_t> ((format == Format::JP8080) ? fxType : (fxType == 12 ? 0 : fxType));
     out[0x3E] = static_cast<std::uint8_t> (clampByte (patch.effects.chorus, 0, 127));
 
     out[0x3F] = static_cast<std::uint8_t> (clampByte (static_cast<int> (patch.effects.delayType), 0, 4));

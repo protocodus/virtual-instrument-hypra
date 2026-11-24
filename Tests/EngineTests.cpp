@@ -449,7 +449,7 @@ void stability()
         p.pitchLfo = signed7();
         p.pitchEnvDepth = signed7();
         p.lfo1.rate = byte();
-        p.effects.chorusType = static_cast<ChorusType> (byte() % 12);
+        p.effects.chorusType = static_cast<ChorusType> (byte() % 13);
         p.effects.chorus = byte();
         p.effects.delayType = static_cast<DelayType> (byte() % 5);
         p.effects.delay = byte();
@@ -719,6 +719,120 @@ void multiFxTypes()
     }
     check (std::abs (widths[0] - widths[2]) > 1e-3, "SuperSlow and SuperFast have distinct stereo signatures");
     check (std::abs (widths[4] - widths[7]) > 1e-3, "Flanger and Phasing presets differ");
+
+    // JP-8080 Multi-FX mode 12 (Distortion): dry passthrough at level 0, monotonic THD across levels,
+    // even + odd asymmetry harmonics, independent L/R channels, zero input -> zero output, and block parity.
+    {
+        Chorus cDry;
+        cDry.reset();
+        cDry.configure (ChorusType::Distortion, 0);
+        cDry.snap();
+        for (int i = 0; i < 64; ++i)
+        {
+            const StereoQ23 in { toQ23 ((i - 32) * 0.002), toQ23 ((32 - i) * 0.0015) };
+            const StereoQ23 got = cDry.processMixQ23 (in);
+            check (got.l == sat24 (mul8 (in.l, 116, 7)) && got.r == sat24 (mul8 (in.r, 116, 7)),
+                   "Distortion level 0 is bit-identical dry");
+        }
+    }
+
+    auto measureDistortion = [] (int level, double& thd, double& h2Ratio, double& h3Ratio, double& maxAbs)
+    {
+        Chorus c;
+        c.reset();
+        c.configure (ChorusType::Distortion, level);
+        c.snap();
+        std::vector<double> tail (22050);
+        maxAbs = 0.0;
+        for (int i = 0; i < 44100; ++i)
+        {
+            const double dry = (0.25 / 12.0) * std::sin (kTwoPi * 220.0 * i / fs);
+            const Stereo y = c.processMix ({ dry, dry });
+            check (y.l == y.r, "Distortion keeps L == R identical for identical channels");
+            maxAbs = std::max (maxAbs, std::abs (y.l));
+            if (i >= 22050)
+                tail[static_cast<std::size_t> (i - 22050)] = y.l;
+        }
+        const double h1 = std::max (1e-12, tone (tail, 220.0));
+        const double h2 = tone (tail, 440.0);
+        const double h3 = tone (tail, 660.0);
+        const double h4 = tone (tail, 880.0);
+        const double h5 = tone (tail, 1100.0);
+        thd = std::sqrt (h2 * h2 + h3 * h3 + h4 * h4 + h5 * h5) / h1;
+        h2Ratio = h2 / h1;
+        h3Ratio = h3 / h1;
+    };
+
+    double thd24 = 0.0, h2_24 = 0.0, h3_24 = 0.0, max24 = 0.0;
+    double thd64 = 0.0, h2_64 = 0.0, h3_64 = 0.0, max64 = 0.0;
+    double thd127 = 0.0, h2_127 = 0.0, h3_127 = 0.0, max127 = 0.0;
+    measureDistortion (24, thd24, h2_24, h3_24, max24);
+    measureDistortion (64, thd64, h2_64, h3_64, max64);
+    measureDistortion (127, thd127, h2_127, h3_127, max127);
+    check (max24 > 0.005 && max24 < 0.25 && max64 < 0.25 && max127 < 0.25,
+           "Distortion output stays cleanly bounded at internal bus scale");
+    check (h2_64 > 1e-3 && h3_64 > 1e-3 && h2_127 > 1e-3 && h3_127 > 1e-3,
+           "Distortion generates both 2nd (asymmetric) and 3rd harmonics");
+    check (thd24 > 1e-4 && thd64 > thd24 && thd127 > thd64,
+           "Distortion THD increases monotonically with level 24 < 64 < 127");
+
+    // Zero input -> exact zero output, L != R independence, and sample-vs-block parity.
+    {
+        Chorus cZero;
+        cZero.reset();
+        cZero.configure (ChorusType::Distortion, 127);
+        cZero.snap();
+        for (int i = 0; i < 64; ++i)
+        {
+            const Stereo y = cZero.processMix ({ 0.0, 0.0 });
+            check (y.l == 0.0 && y.r == 0.0, "Distortion produces exact zero output for silence");
+        }
+
+        Chorus cA, cB;
+        cA.reset();
+        cB.reset();
+        cA.configure (ChorusType::Distortion, 96);
+        cB.configure (ChorusType::Distortion, 96);
+        cA.snap();
+        cB.snap();
+        double diffRSq = 0.0;
+        for (int i = 0; i < 128; ++i)
+        {
+            const double inL = (0.20 / 12.0) * std::sin (kTwoPi * 330.0 * i / fs);
+            const Stereo yA = cA.processMix ({ inL, 0.0 });
+            const Stereo yB = cB.processMix ({ inL, (0.30 / 12.0) * std::cos (kTwoPi * 110.0 * i / fs) });
+            check (yA.l == yB.l, "Distortion left output is unaffected by right channel");
+            diffRSq += (yA.r - yB.r) * (yA.r - yB.r);
+        }
+        check (std::sqrt (diffRSq / 128.0) > 1e-3, "Distortion right channel responds independently");
+
+        Chorus cSingle, cBlock;
+        cSingle.reset();
+        cBlock.reset();
+        const int blocks[] { 1, 7, 64, 513, 19, 128 };
+        int sampleIdx = 0;
+        for (int bIdx = 0; bIdx < 6; ++bIdx)
+        {
+            const int lvl = (bIdx == 0) ? 0 : (bIdx < 3 ? 64 : (bIdx < 5 ? 127 : 0));
+            cSingle.configure (ChorusType::Distortion, lvl);
+            cBlock.configure (ChorusType::Distortion, lvl);
+            const int n = blocks[bIdx];
+            std::vector<Q23> bL (static_cast<std::size_t> (n)), bR (static_cast<std::size_t> (n));
+            for (int k = 0; k < n; ++k, ++sampleIdx)
+            {
+                bL[static_cast<std::size_t> (k)] = toQ23 ((0.22 / 12.0) * std::sin (kTwoPi * 180.0 * sampleIdx / fs));
+                bR[static_cast<std::size_t> (k)] = toQ23 ((0.18 / 12.0) * std::cos (kTwoPi * 260.0 * sampleIdx / fs));
+            }
+            std::vector<Q23> sL = bL, sR = bR;
+            cBlock.processBlockMixQ23 (bL.data(), bR.data(), n);
+            for (int k = 0; k < n; ++k)
+            {
+                const StereoQ23 out = cSingle.processMixQ23 ({ sL[static_cast<std::size_t> (k)], sR[static_cast<std::size_t> (k)] });
+                check (out.l == bL[static_cast<std::size_t> (k)] && out.r == bR[static_cast<std::size_t> (k)],
+                       "Distortion single-sample and block processing are bit-exact");
+            }
+        }
+    }
 }
 
 void envelopeSmoother()
@@ -1824,6 +1938,18 @@ void automationGlitch()
     verifyStep ("chorus_type rev", smooth, true,
                 [&] (Engine& e) { Patch alt = smooth; alt.effects.chorus = 80; alt.effects.chorusType = ChorusType::FlangerFast; e.setPatch (Part::Upper, alt); },
                 64, [&] (Engine& e) { Patch alt = smooth; alt.effects.chorus = 80; alt.effects.chorusType = ChorusType::SuperSlow; e.setPatch (Part::Upper, alt); });
+    Patch distBase = smooth;
+    distBase.effects.chorus = 80;
+    distBase.effects.chorusType = ChorusType::Distortion;
+    verifyStep ("chorus_distortion rev", distBase, true,
+                [&] (Engine& e) { Patch alt = distBase; alt.effects.chorusType = ChorusType::Freeze2; e.setPatch (Part::Upper, alt); },
+                64, [&] (Engine& e) { e.setPatch (Part::Upper, distBase); });
+    Patch chorusBase = smooth;
+    chorusBase.effects.chorus = 80;
+    chorusBase.effects.chorusType = ChorusType::SuperSlow;
+    verifyStep ("chorus_to_distortion rev", chorusBase, true,
+                [&] (Engine& e) { Patch alt = chorusBase; alt.effects.chorusType = ChorusType::Distortion; e.setPatch (Part::Upper, alt); },
+                64, [&] (Engine& e) { e.setPatch (Part::Upper, chorusBase); });
     verifyStep ("analog_color rev", smooth, true,
                 [] (Engine& e) { e.setAnalogColor (false); },
                 64, [] (Engine& e) { e.setAnalogColor (true); });
@@ -2854,9 +2980,39 @@ void sysexCodec()
            && perfRes.patches[0].patch.osc2.wave == Wave2::Triangle
            && perfRes.patches[0].warnings.osc2NoiseMappedToTriangle
            && perfRes.patches[1].patch.effects.delaySync == 3
-           && perfRes.patches[1].patch.effects.chorusType == ChorusType::SuperSlow
-           && perfRes.patches[1].warnings.distortionMappedToChorus,
-           "Performance overlay maps Arp + DelaySync + graceful JP-8080 Osc2Noise/Distortion fallbacks");
+           && perfRes.patches[1].patch.effects.chorusType == ChorusType::Distortion
+           && ! perfRes.patches[1].warnings.distortionMappedToChorus,
+           "Performance overlay maps Arp + DelaySync + native JP-8080 Distortion and Osc2Noise fallback");
+
+    // 5b. Exporting ChorusType::Distortion emits byte 12 in JP-8080 format and maps to 0 (SuperSlow) in JP-8000 format.
+    {
+        Patch distPatch = full;
+        distPatch.effects.chorusType = ChorusType::Distortion;
+        distPatch.effects.chorus = 77;
+        std::array<std::uint8_t, kRackPatchBytes> rackBytes {};
+        std::array<std::uint8_t, kKeyboardPatchBytes> kbBytes {};
+        check (writePatchBytes (distPatch, "DistLead", Format::JP8080, rackBytes.data(), rackBytes.size()) == kRackPatchBytes
+               && rackBytes[0x3D] == 12,
+               "JP-8080 raw export encodes ChorusType::Distortion as MultiEffectsType 12");
+        check (writePatchBytes (distPatch, "DistLead", Format::JP8000, kbBytes.data(), kbBytes.size()) == kKeyboardPatchBytes
+               && kbBytes[0x3D] == 0,
+               "JP-8000 raw export clamps ChorusType::Distortion cleanly to 0 (Super Chorus Slow)");
+
+        const auto dist8080Pkt = encodePatch (distPatch, "DistLead", Format::JP8080);
+        const ParseResult dist8080Res = parseStream (dist8080Pkt.data(), dist8080Pkt.size());
+        check (dist8080Res.patches.size() == 1
+               && dist8080Res.patches[0].detectedFormat == Format::JP8080
+               && dist8080Res.patches[0].patch.effects.chorusType == ChorusType::Distortion
+               && ! dist8080Res.patches[0].warnings.distortionMappedToChorus,
+               "JP-8080 Distortion SysEx round-trips natively without fallback warnings");
+
+        const auto dist8kPkt = encodePatch (distPatch, "DistLead", Format::JP8000);
+        const ParseResult dist8kRes = parseStream (dist8kPkt.data(), dist8kPkt.size());
+        check (dist8kRes.patches.size() == 1
+               && dist8kRes.patches[0].detectedFormat == Format::JP8000
+               && dist8kRes.patches[0].patch.effects.chorusType == ChorusType::SuperSlow,
+               "JP-8000 SysEx export maps Distortion safely to SuperSlow");
+    }
 
     // 6. Standard MIDI File (.mid) extraction + corrupt checksum rejection.
     std::vector<std::uint8_t> trackBody;

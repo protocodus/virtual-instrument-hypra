@@ -15,7 +15,7 @@ enum class PanMode : std::uint8_t { Off, Auto, Manual };
 enum class ChorusType : std::uint8_t
 {
     SuperSlow, SuperMid, SuperFast, SuperClear, FlangerSlow, FlangerDeep,
-    FlangerFast, DeepPhasing, JetPhasing, Twisting, Freeze1, Freeze2
+    FlangerFast, DeepPhasing, JetPhasing, Twisting, Freeze1, Freeze2, Distortion
 };
 enum class DelayType : std::uint8_t { PanLR, PanRL, PanShort, MonoShort, MonoLong };
 enum class ArpMode : std::uint8_t { Up, Down, UpDown, Random, AsPlayed };

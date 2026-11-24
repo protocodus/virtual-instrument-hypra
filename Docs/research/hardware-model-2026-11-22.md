@@ -89,6 +89,7 @@ at 34 and 73 kHz.
 | Velocity matrix, ring modulation, LFO to X-MOD | old guesses | black-box sweeps |
 | Control rate | 2.76 kHz with interpolated cutoff and gain | stepping in a fast sweep |
 | Modulated chorus and flanger types | names from the manual, settings chosen here | a cleaner capture method |
+| JP-8080 Multi-FX Distortion (type `12`) | asymmetric `softClip` overdrive (`140 Hz` pre-HPF keeping 25% sub, `1.88x..15x` drive, `5.5 kHz` post-LPF, `12 Hz` DC blocker, loudness-compensated) inferred from hardware behavior | direct JP-8080 hardware measurement sweep |
 | Delay tone and LEVEL below 127 | flat, linear | clicks at several levels |
 | Headroom and clipping | hard clip at the end of the DSP | overdriven recording |
 | Unison detune spread | even, +/-12 cents by default | a recording |

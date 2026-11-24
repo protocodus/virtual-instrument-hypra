@@ -4,7 +4,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum supported macOS version")
 endif()
 
-project(Trancera VERSION 0.9.3 LANGUAGES CXX)
+project(Trancera VERSION 0.9.4 LANGUAGES CXX)
 
 # Source/DSP is C++17 and JUCE-free: the Rack Extension compiles it directly.
 set(CMAKE_CXX_STANDARD 17)

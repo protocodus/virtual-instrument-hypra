@@ -540,6 +540,7 @@ public:
         write_ = 0;
         phase_ = 0;
         lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
+        distHpL_ = distHpR_ = distLpL_ = distLpR_ = distDcL_ = distDcR_ = 0.0;
         pendingType_ = type_;
         typeFade_ = 256;
         fadeState_ = FadeState::Idle;
@@ -550,23 +551,28 @@ public:
     void configure (ChorusType type, int level) noexcept
     {
         lvlTarget_ = mapping::levelCurveQ23 (level);
-        lvlMoving_ = lvl_ != lvlTarget_;
+        distLvlTarget_ = static_cast<Q23> ((static_cast<std::int64_t> (std::clamp (level, 0, 127)) * kQ23One) / 127);
+        lvlMoving_ = lvl_ != lvlTarget_ || distLvl_ != distLvlTarget_;
         if (fresh_)
         {
             type_ = pendingType_ = type;
             phase_ = 0;
             lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
+            distHpL_ = distHpR_ = distLpL_ = distLpR_ = distDcL_ = distDcR_ = 0.0;
             typeFade_ = 256;
             fadeState_ = FadeState::Idle;
             fresh_ = false;
         }
         else if (type != pendingType_ || (fadeState_ == FadeState::Idle && type != type_))
         {
-            if (lvl_ == 0 && lvlTarget_ == 0 && wetL_ == 0 && wetR_ == 0)
+            if (lvl_ == 0 && lvlTarget_ == 0 && distLvl_ == 0 && distLvlTarget_ == 0 && wetL_ == 0 && wetR_ == 0)
             {
+                if (type_ == ChorusType::Distortion && type != ChorusType::Distortion)
+                    buf_.fill (0u);
                 type_ = pendingType_ = type;
                 phase_ = 0;
                 lpIn_ = fbLp_ = dc_ = 0;
+                distHpL_ = distHpR_ = distLpL_ = distLpR_ = distDcL_ = distDcR_ = 0.0;
                 typeFade_ = 256;
                 fadeState_ = FadeState::Idle;
             }
@@ -585,10 +591,13 @@ public:
 
     void snap() noexcept
     {
+        if (type_ != pendingType_ && (type_ == ChorusType::Distortion || pendingType_ == ChorusType::Distortion))
+            buf_.fill (0u);
         type_ = pendingType_;
         typeFade_ = 256;
         fadeState_ = FadeState::Idle;
         lvl_ = lvlTarget_;
+        distLvl_ = distLvlTarget_;
         lvlSplit_ = splitCoeff15 (lvl_);
         lvlMoving_ = false;
         fresh_ = false;
@@ -599,8 +608,9 @@ public:
         if (lvlMoving_)
         {
             lvl_ = smoothStepQ23 (lvl_, lvlTarget_, 7);
+            distLvl_ = smoothStepQ23 (distLvl_, distLvlTarget_, 7);
             lvlSplit_ = splitCoeff15 (lvl_);
-            lvlMoving_ = lvl_ != lvlTarget_;
+            lvlMoving_ = lvl_ != lvlTarget_ || distLvl_ != distLvlTarget_;
         }
         if (fadeState_ == FadeState::FadeOut)
         {
@@ -608,9 +618,12 @@ public:
                 --typeFade_;
             if (typeFade_ <= 0)
             {
+                if (type_ != pendingType_ && (type_ == ChorusType::Distortion || pendingType_ == ChorusType::Distortion))
+                    buf_.fill (0u);
                 type_ = pendingType_;
                 phase_ = 0;
                 lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
+                distHpL_ = distHpR_ = distLpL_ = distLpR_ = distDcL_ = distDcR_ = 0.0;
                 typeFade_ = 0;
                 fadeState_ = FadeState::FadeIn;
             }
@@ -624,6 +637,20 @@ public:
                 typeFade_ = 256;
                 fadeState_ = FadeState::Idle;
             }
+        }
+
+        if (type_ == ChorusType::Distortion)
+        {
+            const Q23 dL = processDistortionChannel (dry.l, distHpL_, distLpL_, distDcL_);
+            const Q23 dR = processDistortionChannel (dry.r, distHpR_, distLpR_, distDcR_);
+            const Q23 wL = fadeState_ == FadeState::Idle
+                               ? dL
+                               : static_cast<Q23> ((static_cast<std::int64_t> (dL) * typeFade_) >> 8);
+            const Q23 wR = fadeState_ == FadeState::Idle
+                               ? dR
+                               : static_cast<Q23> ((static_cast<std::int64_t> (dR) * typeFade_) >> 8);
+            return { sat24 (mul8 (dry.l, 116, 7) + mul8 (wL, 116, 7)),
+                     sat24 (mul8 (dry.r, 116, 7) + mul8 (wR, 116, 7)) };
         }
 
         const PresetQ23& p = preset (type_);
@@ -671,6 +698,8 @@ public:
 
     void advanceIdlePhase (int n) noexcept
     {
+        if (type_ == ChorusType::Distortion)
+            return;
         const PresetQ23& p = preset (type_);
         phase_ = wrap24 (static_cast<std::int32_t> (static_cast<std::int64_t> (phase_)
                                                   + static_cast<std::int64_t> (n) * p.phaseStep));
@@ -688,6 +717,25 @@ public:
         }
         if (i >= n)
             return;
+
+        if (type_ == ChorusType::Distortion)
+        {
+            double hpL = distHpL_, hpR = distHpR_;
+            double lpL = distLpL_, lpR = distLpR_;
+            double dcL = distDcL_, dcR = distDcR_;
+            for (; i < n; ++i)
+            {
+                const Q23 dryL = bufL[i], dryR = bufR[i];
+                const Q23 wL = processDistortionChannel (dryL, hpL, lpL, dcL);
+                const Q23 wR = processDistortionChannel (dryR, hpR, lpR, dcR);
+                bufL[i] = sat24 (mul8 (dryL, 116, 7) + mul8 (wL, 116, 7));
+                bufR[i] = sat24 (mul8 (dryR, 116, 7) + mul8 (wR, 116, 7));
+            }
+            distHpL_ = hpL; distHpR_ = hpR;
+            distLpL_ = lpL; distLpR_ = lpR;
+            distDcL_ = dcL; distDcR_ = dcR;
+            return;
+        }
 
         const PresetQ23& p = preset (type_);
         int write = write_;
@@ -787,7 +835,45 @@ private:
             makePreset (14352, 8896,  -6144, 1024,   10, 80,   0,  8192),
             makePreset (14352, 8896,  -3072, 3072,   10, 80,   0,  8192),
         } };
-        return table[static_cast<std::size_t> (type)];
+        const auto idx = std::min<std::size_t> (static_cast<std::size_t> (type), table.size() - 1);
+        return table[idx];
+    }
+
+    TRANCERA_FORCE_INLINE Q23 processDistortionChannel (Q23 xQ23, double& hp, double& lp, double& dc) const noexcept
+    {
+        if (distLvl_ <= 0)
+        {
+            hp = lp = dc = 0.0;
+            return 0;
+        }
+        const double x = fromQ23 (xQ23) * 12.0;
+        hp += 0.01975 * (x - hp);
+        if (fastAbs (hp) < 1e-24)
+            hp = 0.0;
+        const double shaped = (x - hp) + 0.25 * hp;
+
+        const double u = static_cast<double> (distLvl_) * (1.0 / static_cast<double> (kQ23One));
+        const double mix = u < 0.2 ? (u * 5.0) : 1.0;
+        const double drive = 1.0 + u * (2.5 + 11.5 * u);
+        const double w = shaped * drive;
+        const double driven = (w >= 0.0) ? (w * 1.12) : (w * 0.88);
+        const double bias = 0.14 * u;
+        const double c0 = softClip (bias);
+        const double sat = softClip (driven + bias) - c0;
+
+        const double makeup = 0.80 - 0.20 * u;
+        lp += 0.54325 * (sat * makeup - lp);
+        if (fastAbs (lp) < 1e-24)
+            lp = 0.0;
+        dc += 0.001708 * (lp - dc);
+        if (fastAbs (dc) < 1e-24)
+            dc = 0.0;
+
+        const double wetCh = (lp - dc) * (1.0 / 12.0);
+        const double dryCh = fromQ23 (xQ23);
+        const double delta = mix * (wetCh - dryCh);
+        const double scaled = std::clamp (delta, -1.0, 1.0) * static_cast<double> (kQ23Max);
+        return sat24 (static_cast<std::int32_t> (scaled + (scaled >= 0.0 ? 0.5 : -0.5)));
     }
 
     static TRANCERA_FORCE_INLINE Q23 readQ23At (const std::uint16_t* buf, int write, std::int32_t delayQ16) noexcept
@@ -813,9 +899,10 @@ private:
     ChorusType type_ { ChorusType::SuperSlow }, pendingType_ { ChorusType::SuperSlow };
     int typeFade_ { 256 };
     FadeState fadeState_ { FadeState::Idle };
-    Q23 lvl_ { 0 }, lvlTarget_ { 0 }, phase_ { 0 };
+    Q23 lvl_ { 0 }, lvlTarget_ { 0 }, distLvl_ { 0 }, distLvlTarget_ { 0 }, phase_ { 0 };
     Coeff15 lvlSplit_ {};
     Q23 lpIn_ { 0 }, fbLp_ { 0 }, dc_ { 0 }, wetL_ { 0 }, wetR_ { 0 };
+    double distHpL_ { 0.0 }, distHpR_ { 0.0 }, distLpL_ { 0.0 }, distLpR_ { 0.0 }, distDcL_ { 0.0 }, distDcR_ { 0.0 };
     bool lvlMoving_ { false }, fresh_ { true };
 };
 } // namespace trancera

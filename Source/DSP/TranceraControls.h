@@ -85,7 +85,7 @@ inline constexpr std::array<ControlInfo, kControlCount> kControls { {
     { "lfo2_amp", "LFO 2 Amp", -64, 63, 0, 0 },
     { "bass", "Tone Bass", -64, 63, 0, 0 },
     { "treble", "Tone Treble", -64, 63, 0, 0 },
-    { "chorus_type", "Effect Type", 0, 11, 0, 12 },
+    { "chorus_type", "Effect Type", 0, 12, 0, 13 },
     { "chorus_level", "Effect Level", 0, 127, 0, 0 },
     { "delay_type", "Delay Type", 0, 4, 0, 5 },
     { "delay_time", "Delay Time", 0, 127, 64, 0 },
