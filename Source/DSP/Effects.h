@@ -64,6 +64,31 @@ public:
         }
     }
 
+    // Copies filter delay state and smoothed coefficients when a dual-mono voice bus widens to stereo.
+    void copyStateFrom (const ToneControl& other) noexcept
+    {
+        xB1Q_ = other.xB1Q_;
+        yB1Q_ = other.yB1Q_;
+        yBoutPrevQ_ = other.yBoutPrevQ_;
+        xT1Q_ = other.xT1Q_;
+        yT1Q_ = other.yT1Q_;
+        negBB_ = other.negBB_;
+        negBBTarget_ = other.negBBTarget_;
+        aBQ23_ = other.aBQ23_;
+        aBTarget_ = other.aBTarget_;
+        negBT_ = other.negBT_;
+        negBTTarget_ = other.negBTTarget_;
+        aTQ23_ = other.aTQ23_;
+        aTTarget_ = other.aTTarget_;
+        gCutQ23_ = other.gCutQ23_;
+        gCutTarget_ = other.gCutTarget_;
+        gBoostQ23_ = other.gBoostQ23_;
+        gBoostTarget_ = other.gBoostTarget_;
+        moving_ = other.moving_;
+        fresh_ = other.fresh_;
+        updateSplits();
+    }
+
     // Internal hardware gain staging with rail clipping and -12 dB flat headroom.
     Q23 processSaturatingQ23 (Q23 x) noexcept
     {
@@ -202,10 +227,17 @@ public:
         snap();
     }
 
-    void configure (DelayType type, int time, int feedback, int level) noexcept
+    int maxDelayTicks() const noexcept
+    {
+        return static_cast<int> (std::max (d1Q16_, d1TargetQ16_) >> 16);
+    }
+
+    void configure (DelayType type, int time, int feedback, int level, int delaySync = 0, double bpm = 120.0) noexcept
     {
         type_ = type;
-        d1TargetQ16_ = static_cast<std::int64_t> (std::llround (std::clamp (mapping::delaySamples (type, time), 2.0, static_cast<double> (size - 3)) * 65536.0));
+        const double rawSamples = delaySync > 0 ? mapping::delaySyncedSamples (type, delaySync, bpm)
+                                                : mapping::delaySamples (type, time);
+        d1TargetQ16_ = static_cast<std::int64_t> (std::llround (std::clamp (rawSamples, 2.0, static_cast<double> (size - 3)) * 65536.0));
         fbTarget_ = mapping::levelCurveQ23 (feedback);
         lvlTarget_ = mapping::levelCurveQ23 (level);
         fbMoving_ = fb_ != fbTarget_;
@@ -312,22 +344,49 @@ public:
 
     void processBlockMixQ23 (const Q23* in, Q23* outL, Q23* outR, int n) noexcept
     {
+        processBlockMixCore<false> (in, in, outL, outR, n);
+    }
+
+    void processBlockMixStereoQ23 (const Q23* inL, const Q23* inR, Q23* outL, Q23* outR, int n) noexcept
+    {
+        processBlockMixCore<true> (inL, inR, outL, outR, n);
+    }
+
+    Stereo process (double x) noexcept
+    {
+        const StereoQ23 y = processQ23 (toQ23 (x));
+        return { fromQ23 (y.l), fromQ23 (y.r) };
+    }
+
+    Stereo processMix (double x) noexcept
+    {
+        const StereoQ23 y = processMixQ23 (toQ23 (x));
+        return { fromQ23 (y.l), fromQ23 (y.r) };
+    }
+
+private:
+    template <bool kStereo>
+    void processBlockMixCore (const Q23* inL, const Q23* inR, Q23* outL, Q23* outR, int n) noexcept
+    {
         if (buf_.empty())
         {
             for (int i = 0; i < n; ++i)
             {
-                const Q23 dry = mul8 (in[i], 112, 7);
-                outL[i] = dry;
-                outR[i] = dry;
+                const Q23 dryL = mul8 (inL[i], 112, 7);
+                outL[i] = dryL;
+                outR[i] = kStereo ? mul8 (inR[i], 112, 7) : dryL;
             }
             return;
         }
         int i = 0;
         while (i < n && (d1Q16_ != d1TargetQ16_ || fbMoving_ || lvlMoving_ || routeMoving_))
         {
-            const StereoQ23 mixed = processMixQ23 (in[i]);
-            outL[i] = mixed.l;
-            outR[i] = mixed.r;
+            const Q23 x = kStereo ? static_cast<Q23> ((static_cast<std::int64_t> (inL[i]) + inR[i]) >> 1) : inL[i];
+            const StereoQ23 wet = processQ23 (x);
+            const Q23 dryL = mul8 (inL[i], 112, 7);
+            const Q23 dryR = kStereo ? mul8 (inR[i], 112, 7) : dryL;
+            outL[i] = sat24 (dryL + wet.l);
+            outR[i] = sat24 (dryR + wet.r);
             ++i;
         }
         if (i >= n)
@@ -354,7 +413,9 @@ public:
             {
                 const Q23 tap1 = readFixedQ23At (bufPtr, write, whole1, frac1);
                 const Q23 tap2 = readFixedQ23At (bufPtr, write, whole2, frac2);
-                const Q23 x = in[i];
+                const Q23 dl = inL[i];
+                const Q23 dr = kStereo ? inR[i] : dl;
+                const Q23 x = kStereo ? static_cast<Q23> ((static_cast<std::int64_t> (dl) + dr) >> 1) : dl;
                 const Q23 sIn = sat24 (mul8 (x, 96, 7) + mulSplit15 (tap1, fbSplit.hi, fbSplit.lo));
                 lp = sat24 (mul8 (sIn, lpfOmK8, 7) + mul8 (lp, lpfK8, 7));
                 const Q23 hp = sat24 (mulImmediate15 (lp, 127, 96, 7) + dc);
@@ -364,22 +425,22 @@ public:
 
                 const Q23 w1 = mulSplit15 (tap1, lvlSplit.hi, lvlSplit.lo);
                 const Q23 w2 = mulSplit15 (tap2, lvlSplit.hi, lvlSplit.lo);
-                const Q23 dry = mul8 (x, 112, 7);
+                const Q23 dryL = mul8 (dl, 112, 7);
+                const Q23 dryR = kStereo ? mul8 (dr, 112, 7) : dryL;
                 if (r == 0)
                 {
-                    outL[i] = sat24 (dry + w2);
-                    outR[i] = sat24 (dry + w1);
+                    outL[i] = sat24 (dryL + w2);
+                    outR[i] = sat24 (dryR + w1);
                 }
                 else if (r == 1)
                 {
-                    outL[i] = sat24 (dry + w1);
-                    outR[i] = sat24 (dry + w2);
+                    outL[i] = sat24 (dryL + w1);
+                    outR[i] = sat24 (dryR + w2);
                 }
                 else
                 {
-                    const Q23 m = sat24 (dry + w1);
-                    outL[i] = m;
-                    outR[i] = m;
+                    outL[i] = sat24 (dryL + w1);
+                    outR[i] = sat24 (dryR + w1);
                 }
             }
         };
@@ -395,19 +456,6 @@ public:
         dc_ = dc;
     }
 
-    Stereo process (double x) noexcept
-    {
-        const StereoQ23 y = processQ23 (toQ23 (x));
-        return { fromQ23 (y.l), fromQ23 (y.r) };
-    }
-
-    Stereo processMix (double x) noexcept
-    {
-        const StereoQ23 y = processMixQ23 (toQ23 (x));
-        return { fromQ23 (y.l), fromQ23 (y.r) };
-    }
-
-private:
     static TRANCERA_FORCE_INLINE Q23 readFixedQ23At (const std::uint16_t* buf, int write, std::int32_t whole, std::int32_t frac) noexcept
     {
         const std::int32_t idx = (write - whole) & mask;
@@ -465,7 +513,7 @@ private:
                        || gR1_ != gR1Target_ || gR2_ != gR2Target_;
     }
 
-    static constexpr int size = 1 << 17, mask = size - 1;
+    static constexpr int size = 1 << 18, mask = size - 1;
     std::vector<std::uint16_t> buf_;
     int write_ { 0 };
     DelayType type_ { DelayType::PanLR };

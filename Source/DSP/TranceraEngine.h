@@ -45,6 +45,7 @@ public:
     void allNotesOff() noexcept;
     void pitchBend (double value) noexcept;
     void modWheel (double value) noexcept;
+    void aftertouch (double value) noexcept;
     void sustain (bool down) noexcept;
     void setTempo (double bpm) noexcept;
 
@@ -60,7 +61,7 @@ private:
         bool active { false }, held { false }, sustained { false };
         int note { 60 };
         std::uint64_t order { 0 };
-        double velocity { 1.0 }, pitch { 60.0 }, target { 60.0 }, detune { 0.0 };
+        double velocity { 1.0 }, pitch { 60.0 }, target { 60.0 }, detune { 0.0 }, unisonPan { 0.0 };
         double portaDelta { 0.0 };
         int portaRemain { 0 };
         int fadePhase { 16384 };
@@ -78,7 +79,7 @@ private:
         static constexpr Q23 kPanCenterQ23 = 22784 << 8;
 
         Patch patch;
-        ToneControl tone;
+        ToneControl tone, toneR;
         Delay delay;
         Chorus chorus;
         Random lfoRandom;
@@ -92,7 +93,8 @@ private:
         Q23 panLQ23 { kPanCenterQ23 }, panRQ23 { kPanCenterQ23 };
         Q23 panTargetLQ23 { kPanCenterQ23 }, panTargetRQ23 { kPanCenterQ23 };
         Coeff15 panLSplit { splitCoeff15 (kPanCenterQ23) }, panRSplit { splitCoeff15 (kPanCenterQ23) };
-        bool hasPlayed { false }, lfoEdge { false };
+        Q23 spreadQ23 { 0 }, spreadTargetQ23 { 0 };
+        bool hasPlayed { false }, lfoEdge { false }, stereoActive { false };
     };
 
     struct Span { int first, count; };
@@ -126,7 +128,7 @@ private:
     std::uint32_t seed_ { 8000 };
     std::uint64_t order_ { 0 };
     double hostRate_ { 44100.0 };
-    double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, tune_ { 0.0 }, tempo_ { 120.0 };
+    double bend_ { 0.0 }, mod_ { 0.0 }, aftertouch_ { 0.0 }, volume_ { 1.0 }, tune_ { 0.0 }, tempo_ { 120.0 };
     int partDetune_ { 0 }, untilControl_ { kEnvelopeInterval }, silentTicks_ { 0 };
     bool sustain_ { false }, everTriggered_ { false };
 };

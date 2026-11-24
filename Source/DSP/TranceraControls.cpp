@@ -57,6 +57,11 @@ int* field (Patch& p, int control) noexcept
         case kArpRange: return &p.arp.range;
         case kArpRate: return &p.arp.rate;
         case kArpGate: return &p.arp.gate;
+        case kFilterVelocity: return &p.velocityFilter;
+        case kAftertouchCutoff: return &p.aftertouchCutoff;
+        case kAftertouchLfo2: return &p.aftertouchLfo2;
+        case kUnisonSpread: return &p.unisonSpread;
+        case kDelaySync: return &p.effects.delaySync;
         default: return nullptr;
     }
 }

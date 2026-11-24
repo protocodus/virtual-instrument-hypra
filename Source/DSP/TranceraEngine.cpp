@@ -4,17 +4,93 @@ namespace trancera
 {
 namespace
 {
-bool unison (const Patch& p) noexcept
+bool unisonEnabled (const Patch& p) noexcept
 {
     return p.unison && p.osc1.wave != Wave1::FeedbackOsc;
+}
+
+bool monoUnison (const Patch& p) noexcept
+{
+    return p.mono && unisonEnabled (p);
+}
+
+bool polyUnison (const Patch& p) noexcept
+{
+    return ! p.mono && unisonEnabled (p);
 }
 
 // [measured] LEGATO alone does not make the part monophonic: JE-8086 plays a
 // three-note chord on Velo Syncoid (MONO off, LEGATO on) as three voices
 // (Tools/blackbox/variants.py, 2026-11-23). It shapes MONO's retriggers only.
+// Poly Unison (MONO off, UNISON on) allocates paired voices per key.
 bool monophonic (const Patch& p) noexcept
 {
-    return p.mono || p.unison || p.osc1.wave == Wave1::FeedbackOsc;
+    return p.mono || p.osc1.wave == Wave1::FeedbackOsc;
+}
+
+double unisonStackPan (int i, int count) noexcept
+{
+    if (count <= 1)
+        return 0.0;
+    const int half = count / 2;
+    const int k = i < half ? i : (count - 1 - i);
+    const double mag = 1.0 - 2.0 * static_cast<double> (k) / static_cast<double> (count - 1);
+    const double sign = ((i < half) == ((k & 1) == 0)) ? -1.0 : 1.0;
+    return sign * mag;
+}
+
+double effectiveModWheel (const Patch& p, double modWheel, double aftertouch) noexcept
+{
+    return std::min (1.0, modWheel + aftertouch * unit (p.aftertouchLfo2));
+}
+
+Stereo unisonStereoHalfGains (double spreadNorm, double voicePan) noexcept
+{
+    const double x = spreadNorm * voicePan;
+    return { 0.5 * fastSqrt (std::max (0.0, 1.0 - x)),
+             0.5 * fastSqrt (std::max (0.0, 1.0 + x)) };
+}
+
+template <class Emit>
+void mixVoiceAmp (Q23& ampSmoothedQ23, Q23 ampTargetQ23, const Coeff15& ampAlpha, Coeff15& ampSplit,
+                  bool& ampMoving, bool& active, bool& held, bool& sustained,
+                  const Q23* buf, int activeLen, int chunkLen, Emit&& emit) noexcept
+{
+    if (! ampMoving)
+    {
+        const std::int32_t aHi = ampSplit.hi, aLo = ampSplit.lo;
+        for (int j = 0; j < activeLen; ++j)
+            emit (j, mulSplit15 (buf[j], aHi, aLo));
+        return;
+    }
+    Q23 cur = ampSmoothedQ23;
+    const std::int32_t alHi = ampAlpha.hi, alLo = ampAlpha.lo;
+    Coeff15 sp = ampSplit;
+    bool mob = true;
+    for (int j = 0; j < activeLen; ++j)
+    {
+        if (mob)
+        {
+            const Q23 nextAmp = sat24 (cur + mulSplit15 (ampTargetQ23 - cur, alHi, alLo));
+            if (nextAmp == cur)
+                mob = false;
+            else
+            {
+                cur = nextAmp;
+                sp = splitCoeff15 (cur);
+            }
+        }
+        emit (j, mulSplit15 (buf[j], sp.hi, sp.lo));
+    }
+    if (activeLen < chunkLen)
+    {
+        cur = sat24 (cur + mulSplit15 (ampTargetQ23 - cur, alHi, alLo));
+        sp = splitCoeff15 (cur);
+        active = held = sustained = false;
+    }
+    ampSmoothedQ23 = cur;
+    ampSplit = sp;
+    ampMoving = mob;
 }
 
 struct EnvLfoFlags
@@ -61,7 +137,7 @@ void Engine::reset() noexcept
     for (Voice& v : voices_)
     {
         v.active = v.held = v.sustained = false;
-        v.portaDelta = 0.0;
+        v.detune = v.unisonPan = v.portaDelta = 0.0;
         v.portaRemain = 0;
         v.fadePhase = 16384;
         v.qSnapTicks = 0;
@@ -89,7 +165,10 @@ void Engine::reset() noexcept
         s.panRQ23 = s.panTargetRQ23 = PartState::kPanCenterQ23;
         s.panLSplit = splitCoeff15 (s.panLQ23);
         s.panRSplit = splitCoeff15 (s.panRQ23);
+        s.spreadQ23 = s.spreadTargetQ23 = 0;
+        s.stereoActive = false;
         s.tone.reset();
+        s.toneR.reset();
         s.delay.reset();
         s.chorus.reset();
     }
@@ -97,7 +176,7 @@ void Engine::reset() noexcept
     resampler_.reset();
     arp_.reset (seed_ ^ 0xA2B1u);
     arp_.setTempo (tempo_);
-    bend_ = mod_ = 0.0;
+    bend_ = mod_ = aftertouch_ = 0.0;
     sustain_ = false;
     everTriggered_ = false;
     order_ = 0;
@@ -204,15 +283,17 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
     PartState& s = parts_[static_cast<std::size_t> (part)];
     const bool prevArpOn = parts_[0].patch.arp.on;
     const bool becameMono = monophonic (patch)
-                            && (! monophonic (s.patch) || unison (patch) != unison (s.patch));
+                            && (! monophonic (s.patch) || monoUnison (patch) != monoUnison (s.patch));
     s.patch = patch;
     s.lfo1Step = mapping::lfo1RateTable[static_cast<std::size_t> (std::clamp (patch.lfo1.rate, 0, 127))];
     s.lfo2Step = mapping::lfo2RateTable[static_cast<std::size_t> (std::clamp (patch.lfo2.rate, 0, 127))];
     s.effAmpLfo = patch.ampLfo;
     const EffectParams& fx = patch.effects;
     s.tone.configure (fx.bass, fx.treble);
-    s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay);
+    s.toneR.configure (fx.bass, fx.treble);
+    s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay, fx.delaySync, tempo_);
     s.chorus.configure (fx.chorusType, fx.chorus);
+    s.spreadTargetQ23 = unisonEnabled (patch) ? toQ23 (std::clamp (patch.unisonSpread, 0, 100) / 100.0) : 0;
     if (patch.pan == PanMode::Off)
     {
         s.panTargetLQ23 = s.panTargetRQ23 = PartState::kPanCenterQ23;
@@ -232,8 +313,11 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
     if (! s.hasPlayed)
     {
         s.tone.snap();
+        s.toneR.snap();
         s.delay.snap();
         s.chorus.snap();
+        s.spreadQ23 = s.spreadTargetQ23;
+        s.stereoActive = s.spreadQ23 != 0;
         if (patch.pan == PanMode::Off || patch.pan == PanMode::Manual)
         {
             s.panLQ23 = s.panTargetLQ23;
@@ -253,11 +337,24 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
         v.filterEnv.configure (vp.filter.env.attack, vp.filter.env.decay,
                                mapping::filterSustain (vp.filter.env.sustain), vp.filter.env.release);
         v.pitchEnv.configure (vp.pitchAttack, vp.pitchDecay, 0.0, vp.pitchDecay);
-        if (unison (patch))
-            v.detune = range.count > 1 ? patch.unisonDetune * (2.0 * (i - range.first) / (range.count - 1) - 1.0) / 100.0 : 0.0;
+        const int localIdx = i - range.first;
+        if (monoUnison (patch))
+        {
+            v.detune = range.count > 1 ? patch.unisonDetune * (2.0 * localIdx / (range.count - 1) - 1.0) / 100.0 : 0.0;
+            v.unisonPan = unisonStackPan (localIdx, range.count);
+        }
+        else if (polyUnison (patch))
+        {
+            const double sign = (localIdx & 1) == 0 ? -1.0 : 1.0;
+            v.detune = sign * patch.unisonDetune / 100.0;
+            v.unisonPan = sign;
+        }
         else
+        {
             v.detune = 0.0;
-        if (becameMono && i - range.first >= (unison (patch) ? range.count : 1))
+            v.unisonPan = 0.0;
+        }
+        if (becameMono && localIdx >= (monoUnison (patch) ? range.count : 1))
             release (v);
         if (v.active)
             controlVoice (v, part, false);
@@ -320,7 +417,8 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
         {
             const EffectParams& fx = v.patch.effects;
             s.tone.configure (fx.bass, fx.treble);
-            s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay);
+            s.toneR.configure (fx.bass, fx.treble);
+            s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay, fx.delaySync, tempo_);
             s.chorus.configure (fx.chorusType, fx.chorus);
             s.lfo1Step = mapping::lfo1RateTable[static_cast<std::size_t> (std::clamp (v.patch.lfo1.rate, 0, 127))];
             s.lfo2Step = mapping::lfo2RateTable[static_cast<std::size_t> (std::clamp (v.patch.lfo2.rate, 0, 127))];
@@ -382,7 +480,7 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
         v.filterEnv.reset();
         v.pitchEnv.reset();
     }
-    const EnvLfoFlags flags = envLfoFlags (p, s.lfoEdge, mod_);
+    const EnvLfoFlags flags = envLfoFlags (p, s.lfoEdge, effectiveModWheel (p, mod_, aftertouch_));
     v.ampEnv.configure (p.amp.attack, p.amp.decay, mapping::ampSustain (p.amp.sustain), p.amp.release);
     v.ampEnv.trigger (flags.ampActive, flags.ampEdge, true);
     v.filterEnv.configure (p.filter.env.attack, p.filter.env.decay,
@@ -401,13 +499,14 @@ void Engine::startMono (int part, int note, int velocity, bool retrigger) noexce
 {
     const PartState& s = parts_[static_cast<std::size_t> (part)];
     const Span range = span (part);
-    const int count = unison (s.patch) ? range.count : 1;
+    const int count = monoUnison (s.patch) ? range.count : 1;
     for (int i = 0; i < range.count; ++i)
     {
         Voice& v = voices_[static_cast<std::size_t> (range.first + i)];
         if (i < count)
         {
             v.detune = count > 1 ? s.patch.unisonDetune * (2.0 * i / (count - 1) - 1.0) / 100.0 : 0.0;
+            v.unisonPan = count > 1 ? unisonStackPan (i, count) : 0.0;
             const bool mayGlide = s.hasPlayed && (! s.patch.legato || ! retrigger);
             trigger (v, part, note, velocity, retrigger, mayGlide);
         }
@@ -428,10 +527,44 @@ void Engine::startPart (int part, int note, int velocity) noexcept
     s.keyCount = kept;
 
     if (monophonic (s.patch))
+    {
         startMono (part, note, velocity, ! (s.patch.legato && overlapping));
+    }
+    else if (const Span range = span (part); polyUnison (s.patch) && range.count >= 2)
+    {
+        const int pairs = range.count / 2;
+        int bestPair = -1;
+        int bestClass = 4;
+        std::uint64_t bestOrder = 0;
+        for (int pIdx = 0; pIdx < pairs; ++pIdx)
+        {
+            const Voice& vA = voices_[static_cast<std::size_t> (range.first + 2 * pIdx)];
+            const Voice& vB = voices_[static_cast<std::size_t> (range.first + 2 * pIdx + 1)];
+            const int kind = ((vA.active && vA.note == note) || (vB.active && vB.note == note)) ? 0
+                           : (! vA.active && ! vB.active) ? 1
+                           : (! vA.held && ! vB.held) ? 2 : 3;
+            const std::uint64_t pairOrder = std::min (vA.order, vB.order);
+            if (kind < bestClass || (kind == bestClass && bestPair >= 0 && pairOrder < bestOrder))
+            {
+                bestClass = kind;
+                bestPair = pIdx;
+                bestOrder = pairOrder;
+            }
+        }
+        if (bestPair >= 0)
+        {
+            Voice& vA = voices_[static_cast<std::size_t> (range.first + 2 * bestPair)];
+            Voice& vB = voices_[static_cast<std::size_t> (range.first + 2 * bestPair + 1)];
+            vA.detune = -s.patch.unisonDetune / 100.0;
+            vA.unisonPan = -1.0;
+            vB.detune = s.patch.unisonDetune / 100.0;
+            vB.unisonPan = 1.0;
+            trigger (vA, part, note, velocity, true, s.hasPlayed);
+            trigger (vB, part, note, velocity, true, s.hasPlayed);
+        }
+    }
     else
     {
-        const Span range = span (part);
         Voice* chosen = nullptr;
         int bestClass = 4;
         for (int i = range.first; i < range.first + range.count; ++i)
@@ -447,6 +580,7 @@ void Engine::startPart (int part, int note, int velocity) noexcept
         if (chosen != nullptr)
         {
             chosen->detune = 0.0;
+            chosen->unisonPan = 0.0;
             trigger (*chosen, part, note, velocity, true, s.hasPlayed);
         }
     }
@@ -563,6 +697,12 @@ void Engine::setTempo (double bpm) noexcept
     const double clamped = std::clamp (bpm, 20.0, 300.0);
     tempo_ = clamped;
     arp_.setTempo (tempo_);
+    for (PartState& s : parts_)
+    {
+        const EffectParams& fx = s.patch.effects;
+        if (fx.delaySync > 0)
+            s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay, fx.delaySync, tempo_);
+    }
 }
 
 void Engine::setTune (double cents) noexcept
@@ -592,6 +732,15 @@ void Engine::modWheel (double value) noexcept
     refreshVoices();
 }
 
+void Engine::aftertouch (double value) noexcept
+{
+    const double a = std::clamp (value, 0.0, 1.0);
+    if (a == aftertouch_)
+        return;
+    aftertouch_ = a;
+    refreshVoices();
+}
+
 void Engine::refreshVoices() noexcept
 {
     for (int part = 0; part < partCount(); ++part)
@@ -615,6 +764,7 @@ void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
 {
     const PartState& s = parts_[static_cast<std::size_t> (part)];
     const Patch& p = v.patch;
+    const double effMod = effectiveModWheel (p, mod_, aftertouch_);
     if (advanceTick)
     {
         if (v.portaRemain > 0)
@@ -628,7 +778,7 @@ void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
             const auto fadeIdx = static_cast<std::size_t> (std::clamp (p.lfo1.fade, 0, 127));
             v.fadePhase = std::min (16384, v.fadePhase + static_cast<int> (mapping::fadeRateTable[fadeIdx]));
         }
-        const EnvLfoFlags flags = envLfoFlags (p, s.lfoEdge, mod_);
+        const EnvLfoFlags flags = envLfoFlags (p, s.lfoEdge, effectiveModWheel (p, mod_, aftertouch_));
         v.ampEnv.tick100Hz (flags.ampActive, flags.ampEdge, true);
         v.filterEnv.tick100Hz (flags.filtActive, flags.filtEdge, flags.filtUseEnvSpeed);
         v.pitchEnv.tick100Hz();
@@ -646,7 +796,7 @@ void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
 
     const double common = v.pitch + v.detune + 12.0 * std::clamp (p.oscShift, -2, 2)
                           + bend_ * (bend_ >= 0.0 ? p.bendUp : p.bendDown)
-                          + mod_ * mapping::pitchLfoSemitones (p.lfo2.pitch) * s.lfo2
+                          + effMod * mapping::pitchLfoSemitones (p.lfo2.pitch) * s.lfo2
                           + (part == 1 ? partDetune_ / 100.0 : 0.0) + tune_;
     const double pitch1 = common + (p.destination == ModDestination::Osc1And2 ? semis : 0.0);
     const double pitch2 = common + mapping::osc2Semitones (p.osc2) + (toXmod ? 0.0 : semis);
@@ -685,13 +835,15 @@ void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
                                ? mapping::velocityCurveUnit (static_cast<int> (std::lround (v.velocity * 127.0)))
                                : v.velocity;
     const double velocityDepth = bipolar (p.velocityFilter) * (velUnit - 0.5) * 5.0;
+    const double atCutoffOctaves = aftertouch_ * bipolar (p.aftertouchCutoff) * 4.0;
     const double octaves = mapping::cutoffOctaves (p.filter.cutoff)
                            + mapping::keyFollow (p.filter.keyFollow)
                                * (v.pitch + 12.0 * std::clamp (p.oscShift, -2, 2) - 60.0) / 12.0
                            + mapping::filterEnvSemitones (p.filter.envDepth) / 12.0 * v.filterEnv.value()
                            + mapping::filterLfoSemitones (p.filter.lfoDepth) / 12.0 * lfo
-                           + mod_ * mapping::filterLfoSemitones (p.lfo2.filter) / 12.0 * s.lfo2
-                           + velocityDepth;
+                           + effMod * mapping::filterLfoSemitones (p.lfo2.filter) / 12.0 * s.lfo2
+                           + velocityDepth
+                           + atCutoffOctaves;
     const double fCoeff = mapping::cutoffCoefficient (octaves);
     const double res = unit (p.filter.resonance);
     const Q23 qAlphaQ23 = v.qSnapTicks > 0 ? (7 * (kQ23One >> 3)) : (1 << 14);
@@ -704,9 +856,11 @@ void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
                      * (1.0 - unit (p.velocityAmp) * (1.0 - velUnit));
     if (p.pan == PanMode::Off)
         ampBase *= std::max (0.0, 1.0 + mapping::ampLfoDepth (p.ampLfo) * lfo);
-    ampBase *= std::max (0.0, 1.0 + mod_ * mapping::ampLfoDepth (p.lfo2.amp) * s.lfo2);
-    if (unison (p))
-        ampBase *= 1.25 / std::sqrt (static_cast<double> (span (part).count));
+    ampBase *= std::max (0.0, 1.0 + effMod * mapping::ampLfoDepth (p.lfo2.amp) * s.lfo2);
+    if (monoUnison (p))
+        ampBase *= 1.25 / fastSqrt (static_cast<double> (span (part).count));
+    else if (polyUnison (p))
+        ampBase *= 1.0 / fastSqrt (2.0);
     v.ampBaseQ23 = toQ23 (ampBase);
     v.ampTargetQ23 = static_cast<Q23> ((static_cast<std::int64_t> (v.ampBaseQ23) * v.ampEnv.valueQ14()) >> 14);
     v.ampAlpha = splitCoeff15 (v.ampEnv.smootherAlphaQ23());
@@ -923,102 +1077,124 @@ void Engine::renderChunk (Stereo* out, int n) noexcept
             ++fltPos;
         }
 
-        std::int32_t voiceSum[kChunkSize] {};
-        for (int k = 0; k < fullCount; ++k)
+        const Q23 spreadStart = s.spreadQ23;
+        const Q23 spreadTarget = s.spreadTargetQ23;
+        const bool useStereo = spreadStart != 0 || spreadTarget != 0;
+        Q23 fxL[kChunkSize], fxR[kChunkSize];
+        if (! useStereo)
         {
-            Voice& v = voices_[static_cast<std::size_t> (fullIdx[k])];
-            const Q23* const buf = voiceBuf[k];
-            if (! v.ampMoving)
+            s.stereoActive = false;
+            std::int32_t voiceSum[kChunkSize] {};
+            for (int k = 0; k < fullCount; ++k)
             {
-                const std::int32_t aHi = v.ampSplit.hi, aLo = v.ampSplit.lo;
-                for (int j = 0; j < n; ++j)
-                    voiceSum[j] += mulSplit15 (buf[j], aHi, aLo);
+                Voice& v = voices_[static_cast<std::size_t> (fullIdx[k])];
+                mixVoiceAmp (v.ampSmoothedQ23, v.ampTargetQ23, v.ampAlpha, v.ampSplit, v.ampMoving,
+                             v.active, v.held, v.sustained, voiceBuf[k], n, n,
+                             [&voiceSum] (int j, Q23 val) noexcept { voiceSum[j] += val; });
             }
-            else
+            for (int t = 0; t < tailCount; ++t)
             {
-                Q23 cur = v.ampSmoothedQ23;
-                const Q23 tgt = v.ampTargetQ23;
-                const std::int32_t alHi = v.ampAlpha.hi, alLo = v.ampAlpha.lo;
-                Coeff15 sp = v.ampSplit;
-                bool mob = true;
-                for (int j = 0; j < n; ++j)
+                Voice& v = voices_[static_cast<std::size_t> (tailIdx[t])];
+                const int activeLen = tailLen[t];
+                Q23 tBuf[kChunkSize];
+                if (activeLen > 0)
                 {
-                    if (mob)
-                    {
-                        const Q23 nextAmp = sat24 (cur + mulSplit15 (tgt - cur, alHi, alLo));
-                        if (nextAmp == cur)
-                            mob = false;
-                        else
-                        {
-                            cur = nextAmp;
-                            sp = splitCoeff15 (cur);
-                        }
-                    }
-                    voiceSum[j] += mulSplit15 (buf[j], sp.hi, sp.lo);
+                    v.oscillators.processBlockQ23 (tBuf, activeLen, random_);
+                    v.filter.processBlockQ23 (tBuf, activeLen);
                 }
-                v.ampSmoothedQ23 = cur;
-                v.ampSplit = sp;
-                v.ampMoving = mob;
+                mixVoiceAmp (v.ampSmoothedQ23, v.ampTargetQ23, v.ampAlpha, v.ampSplit, v.ampMoving,
+                             v.active, v.held, v.sustained, tBuf, activeLen, n,
+                             [&voiceSum] (int j, Q23 val) noexcept { voiceSum[j] += val; });
             }
+            Q23 toned[kChunkSize];
+            for (int j = 0; j < n; ++j)
+                toned[j] = sat24 (voiceSum[j] * 2);
+            s.tone.processBlockSaturatingQ23 (toned, n);
+            s.delay.processBlockMixQ23 (toned, fxL, fxR, n);
+            s.chorus.processBlockMixQ23 (fxL, fxR, n);
         }
-
-        for (int t = 0; t < tailCount; ++t)
+        else
         {
-            Voice& v = voices_[static_cast<std::size_t> (tailIdx[t])];
-            const int activeLen = tailLen[t];
-            Q23 tBuf[kChunkSize];
-            if (activeLen > 0)
+            if (! s.stereoActive)
             {
-                v.oscillators.processBlockQ23 (tBuf, activeLen, random_);
-                v.filter.processBlockQ23 (tBuf, activeLen);
+                s.toneR.copyStateFrom (s.tone);
+                s.stereoActive = true;
             }
-            if (! v.ampMoving)
+            Q23 spreadEnd = spreadStart;
+            if (spreadStart != spreadTarget)
             {
-                const std::int32_t aHi = v.ampSplit.hi, aLo = v.ampSplit.lo;
-                for (int j = 0; j < activeLen; ++j)
-                    voiceSum[j] += mulSplit15 (tBuf[j], aHi, aLo);
+                Q23 curSpread = spreadStart;
+                for (int j = 0; j < n; ++j)
+                    curSpread = smoothStepQ23 (curSpread, spreadTarget, 8);
+                spreadEnd = curSpread;
+                s.spreadQ23 = curSpread;
             }
-            else
-            {
-                Q23 cur = v.ampSmoothedQ23;
-                const Q23 tgt = v.ampTargetQ23;
-                const std::int32_t alHi = v.ampAlpha.hi, alLo = v.ampAlpha.lo;
-                Coeff15 sp = v.ampSplit;
-                bool mob = true;
-                for (int j = 0; j < activeLen; ++j)
-                {
-                    if (mob)
-                    {
-                        const Q23 nextAmp = sat24 (cur + mulSplit15 (tgt - cur, alHi, alLo));
-                        if (nextAmp == cur)
-                            mob = false;
-                        else
-                        {
-                            cur = nextAmp;
-                            sp = splitCoeff15 (cur);
-                        }
-                    }
-                    voiceSum[j] += mulSplit15 (tBuf[j], sp.hi, sp.lo);
-                }
-                if (activeLen < n)
-                {
-                    const Q23 endAmp = sat24 (cur + mulSplit15 (tgt - cur, alHi, alLo));
-                    cur = endAmp;
-                    sp = splitCoeff15 (cur);
-                    v.active = v.held = v.sustained = false;
-                }
-                v.ampSmoothedQ23 = cur;
-                v.ampSplit = sp;
-                v.ampMoving = mob;
-            }
-        }
+            const bool spreadMoving = spreadStart != spreadEnd;
+            const double spreadNormStart = fromQ23 (spreadStart);
+            const double spreadNormEnd = fromQ23 (spreadEnd);
+            std::int32_t voiceSumL[kChunkSize] {}, voiceSumR[kChunkSize] {};
 
-        Q23 toned[kChunkSize], fxL[kChunkSize], fxR[kChunkSize];
-        for (int j = 0; j < n; ++j)
-            toned[j] = sat24 (voiceSum[j] * 2);
-        s.tone.processBlockSaturatingQ23 (toned, n);
-        s.delay.processBlockMixQ23 (toned, fxL, fxR, n);
-        s.chorus.processBlockMixQ23 (fxL, fxR, n);
+            auto sumStereoVoice = [&] (Voice& v, const Q23* buf, int activeLen) noexcept
+            {
+                if (! spreadMoving)
+                {
+                    const Stereo g = unisonStereoHalfGains (spreadNormStart, v.unisonPan);
+                    const Coeff15 spL = splitCoeff15 (toQ23 (g.l));
+                    const Coeff15 spR = splitCoeff15 (toQ23 (g.r));
+                    mixVoiceAmp (v.ampSmoothedQ23, v.ampTargetQ23, v.ampAlpha, v.ampSplit, v.ampMoving,
+                                 v.active, v.held, v.sustained, buf, activeLen, n,
+                                 [&voiceSumL, &voiceSumR, spL, spR] (int j, Q23 val) noexcept
+                                 {
+                                     voiceSumL[j] += mulSplit15 (val, spL.hi, spL.lo) * 2;
+                                     voiceSumR[j] += mulSplit15 (val, spR.hi, spR.lo) * 2;
+                                 });
+                }
+                else
+                {
+                    const Stereo g0 = unisonStereoHalfGains (spreadNormStart, v.unisonPan);
+                    const Stereo g1 = unisonStereoHalfGains (spreadNormEnd, v.unisonPan);
+                    const Q23 gL0Q = toQ23 (g0.l), gL1Q = toQ23 (g1.l);
+                    const Q23 gR0Q = toQ23 (g0.r), gR1Q = toQ23 (g1.r);
+                    const std::int64_t stepLQ = gL1Q - gL0Q;
+                    const std::int64_t stepRQ = gR1Q - gR0Q;
+                    mixVoiceAmp (v.ampSmoothedQ23, v.ampTargetQ23, v.ampAlpha, v.ampSplit, v.ampMoving,
+                                 v.active, v.held, v.sustained, buf, activeLen, n,
+                                 [&voiceSumL, &voiceSumR, gL0Q, gR0Q, stepLQ, stepRQ, n] (int j, Q23 val) noexcept
+                                 {
+                                     const Q23 curLQ = static_cast<Q23> (gL0Q + (stepLQ * j) / n);
+                                     const Q23 curRQ = static_cast<Q23> (gR0Q + (stepRQ * j) / n);
+                                     voiceSumL[j] += mulCoeff15 (val, curLQ) * 2;
+                                     voiceSumR[j] += mulCoeff15 (val, curRQ) * 2;
+                                 });
+                }
+            };
+
+            for (int k = 0; k < fullCount; ++k)
+                sumStereoVoice (voices_[static_cast<std::size_t> (fullIdx[k])], voiceBuf[k], n);
+            for (int t = 0; t < tailCount; ++t)
+            {
+                Voice& v = voices_[static_cast<std::size_t> (tailIdx[t])];
+                const int activeLen = tailLen[t];
+                Q23 tBuf[kChunkSize];
+                if (activeLen > 0)
+                {
+                    v.oscillators.processBlockQ23 (tBuf, activeLen, random_);
+                    v.filter.processBlockQ23 (tBuf, activeLen);
+                }
+                sumStereoVoice (v, tBuf, activeLen);
+            }
+
+            Q23 tonedL[kChunkSize], tonedR[kChunkSize];
+            for (int j = 0; j < n; ++j)
+            {
+                tonedL[j] = sat24 (voiceSumL[j] * 2);
+                tonedR[j] = sat24 (voiceSumR[j] * 2);
+            }
+            s.tone.processBlockSaturatingQ23 (tonedL, n);
+            s.toneR.processBlockSaturatingQ23 (tonedR, n);
+            s.delay.processBlockMixStereoQ23 (tonedL, tonedR, fxL, fxR, n);
+            s.chorus.processBlockMixQ23 (fxL, fxR, n);
+        }
 
         if (s.panLQ23 == s.panTargetLQ23 && s.panRQ23 == s.panTargetRQ23)
         {
@@ -1169,7 +1345,11 @@ void Engine::render (float* left, float* right, int frames) noexcept
     for (const Voice& v : voices_)
         if (v.active) { anyActive = true; break; }
 
-    if (! arp_.active() && (! everTriggered_ || (! anyActive && silentTicks_ >= kIdleTicksThreshold)))
+    int idleThreshold = kIdleTicksThreshold;
+    for (int part = 0; part < partCount(); ++part)
+        idleThreshold = std::max (idleThreshold, parts_[static_cast<std::size_t> (part)].delay.maxDelayTicks() + 8192 + 4096);
+
+    if (! arp_.active() && (! everTriggered_ || (! anyActive && silentTicks_ >= idleThreshold)))
     {
         std::fill_n (left, frames, 0.0f);
         std::fill_n (right, frames, 0.0f);

@@ -1,112 +1,62 @@
 # Trancera
 
-Trancera is a proof of concept of an eight-voice virtual-analog synthesizer
-modelling the Roland JP-8000 (1997), meant to become a Reason Rack Extension
-once its sound is approved. The owner named it Trancera on 2026-11-23 (it was
-Hypra until then). It is an independent
-original implementation, not affiliated with or licensed by Roland, and holds
-no firmware, ROM data, samples, captured audio or factory patch data. Since
-2026-11-23 it is not clean-room: at the owner's risk, constants may be taken
-from an analysis of the JP-8000 firmware (tagged `[firmware]`).
+Trancera is a native C++17 virtual-analog synthesizer modelled on the Roland JP-8000 (1997) and JP-8080 (1998). The owner named it Trancera on 2026-11-23 (it was Hypra until then). It is an independent original implementation, not affiliated with or licensed by Roland, and holds no firmware, ROM data, samples, captured audio or factory patch data. Since 2026-11-23 it is not clean-room: at the owner's risk, constants may be taken from an analysis of the JP-8000 firmware (tagged `[firmware]`).
 
-**Status: 0.9.1, for listening.** The engine is complete enough to judge the
-sound. Its Rack Extension is `Examples/Trancera` in protocodus/reason-rack-extensions.
-There is no plug-in, factory preset bank, arpeggiator, split mode or motion
-control. The saw, pulse and triangle-mod waveforms and the
-filter are fitted to an emulator running the JP-8000's own system software,
-played as a black box, and agree with it within 0.2 dB. So are the
-envelopes, both LFOs, FADE, the modulation depths, pan, OSC BALANCE, key
-follow, portamento, cross mod, ring modulation, the feedback oscillator,
-the noise oscillator and the supersaw's Detune at every value (1-1.5 %
-median gaps), the tone control, and the delay's times, feedback and level.
-The triangle's SHAPE above 0, the velocity matrix and the modulated chorus
-types are still estimates.
+**Status: 0.9.2.** Its Reason Rack Extension is `Examples/Trancera` in `protocodus/reason-rack-extensions` (with a 9U 5× HD Cobalt Studio panel, 56 categorized factory presets plus 14 root highlights, and 68 automatable panel controls plus `Mono`/`Unison`, `DAC Colour`, 14-bit `Mod Wheel`, `Pitch Wheel`, `Sustain`, `Channel Aftertouch`, and auto-routed Note/Gate CV). There is no standalone VST3/AU/CLAP plug-in wrapper yet, and no Split key mode, Control Assign matrix, Arp Beat Patterns, or SysEx `.syx` importer yet.
+
+In a 20-patch JE-8086 A/B pass on `0.9.2` (Part A, `SINGLE`, velocity matrix active, digital node), **18 of 20 factory patches** match within ≤ 2.0 dB across raw level and all three spectral bands (`< 300 Hz`, `0.3–3 kHz`, `> 3 kHz`), and **19 of 20** match within ≤ 2.2 dB.
 
 ![The Rack Extension's front panel](Docs/screenshots/trancera-rack-front.png)
 
-The Rack Extension's front panel, in the JP-8080's colours, rendered by its
-`Design/render_panels.py`. `Docs/screenshots/front-panel-draft-2x.png` is the
-earlier concept.
+The Rack Extension's front panel, rendered by `Design/render_panels.py`.
 
 ---
 
 ## How it works
 
-The JP-8000 is a digital instrument: four Toshiba TC170C140 DSPs compute the
-voices and effects, and only the stage from the DAC to the jacks is analogue.
-So the model has two halves.
+The JP-8000 is a digital instrument: four Toshiba TC170C140 DSPs compute the voices and effects, and only the stage from the DAC to the jacks is analogue. So the model has two halves:
 
-- **The DSP, as behaviour.** 88.2 kHz inside whatever the host rate, naive
-  oscillators that alias, 7-bit controls, an 18-bit DAC and, as inferences,
-  24-bit phase, uncorrected sync and hard clipping at full scale. There is no
-  invented analogue drift, because the hardware has none.
-- **The output stage, as a circuit.** The network from the DAC to the line
-  jack, solved from the 1997 service notes' component values and discretised
-  at 705.6 kHz. Left out: the volume pot's loading, mute transistors,
-  ferrites, a 100 ohm / 100 pF RF filter, op-amp limits and noise.
+- **The DSP, in Q23 fixed point at 88.2 kHz.** Inside whatever host rate is active (with exact rational polyphase resampling, zero-resampler-latency passthrough at 88.2 kHz, and automatic true-idle gating), voices run in saturating 24-bit Q23 fixed point (`sat24`), 15-bit split coefficients (`mulSplit15`), 24-bit wrapping phase accumulators, and 16-bit companded delay RAM.
+  - **Oscillators & modulation:** 7-saw Super Saw with tracked dual-stage HPF and measured detune curve, Saw SHAPE, Pulse/PWM, Triangle SHAPE (cubic phase skew + Chebyshev T3 wavefolder), Triangle Mod, chaotic-recurrence pitched Noise, monophonic 2-tap Feedback Osc, anti-aliased hard sync, ring mod, and linear through-zero X-Mod.
+  - **Filter & Envelopes:** 2-stage saturating Chamberlin SVF (-12 / -24 dB LPF, BPF, HPF), 100 Hz stepped exponential envelopes with 12-level dynamic 88.2 kHz smoothing, dual LFOs with FADE, 40-destination JP-8080 Velocity Matrix, Filter Velocity, and MIDI Channel Aftertouch (`aftertouch_cutoff`, `aftertouch_lfo2`).
+  - **Unison, Arpeggiator & Effects:** JP-8080-style **Polyphonic Unison** (`Mono = Off, Unison = On`, 2 paired voices per note = 4-note polyphony) and **Mono 8-voice Unison** (`Mono = On, Unison = On`) with live detune and equal-power **Stereo Unison Spread**, tempo-synced **Arpeggiator** (`Up`, `Down`, `Up/Down`, `Random`, `As Played`; `1–4` octaves; `1/4–1/32` host-synced rates; `Hold`), saturating Q23 Bass/Treble **Tone Control**, 5 **Delay** types with optional host **Delay Sync** (`Free` and `1/32–1/2` up to 2.97 s), and all 12 dual-tap **Multi-FX Chorus/Flanger/Phaser/Freeze** modes.
+  - **Glitch-free automation:** Sample-rate parameter smoothing and 256-sample crossfades (with clean mid-fade reversals) across waves, filter modes, effects, pan, DAC colour, and stereo unison spread (`28–62` samples control pickup at 48 kHz).
+- **The output stage, as a circuit (`705.6 kHz`, 8×).** Solved from the 1997/1998 service notes: four 0.16 Hz coupling caps, DAC buffer pole/zero, Sallen-Key 28.2 kHz low-pass + ~3.6 dB bass shelf, and flat JP-8080 Rack follower. Toggleable `AnalogColor` (`DAC Colour`) models 18-bit truncation, deterministic R-2R ladder DNL (`0.75 LSB`), and `1.35×` op-amp rail saturation with silent zero gating.
 
-The signal path is `OSC 1 + OSC 2 (sync, ring, X-mod) -> filter -> amp ->
-tone control -> delay -> chorus -> pan -> DAC -> output circuit`, for two
-parts sharing eight voices. Unison comes from the JP-8080; the JP-8000 has no
-unison switch.
+The signal path is `OSC 1 + OSC 2 (sync, ring, X-mod) -> filter -> amp -> tone control -> delay -> chorus -> pan -> DAC -> output circuit`, for up to two parts sharing eight voices (4-voice `Int32x4` / `Double2` SIMD vectorized). `Source/DSP/TranceraControls.h` exposes 70 append-only panel controls.
 
-[The hardware model](Docs/research/hardware-model-2026-11-22.md) says for
-each mechanism whether it is settled by a document, measured by someone else,
-or inferred here.
+[The hardware model](Docs/research/hardware-model-2026-11-22.md) documents what is settled by schematic/manual, measured on hardware/black-box, or inferred.
 
 ## Known gaps
 
-- Only the supersaw at Detune 0 / Mix 0 on one note, the saw at its round
-  end, the 12 dB low-pass, the tone control, the feedback howl's tuning and
-  the output stage's tilt have been checked against the hardware
-  ([measurements](Docs/research/hardware-ab-2026-11-22.md)). Every
-  `[inferred]` law is a placeholder until a recording tests it.
-- The feedback oscillator, the effects' modulation settings, the filter
-  algorithm and all envelope, LFO and cutoff tapers are inferred.
-- The JP-8000's service notes mark a 1.06 kHz pole in the main output which
-  the JP-8080's do not have; see `Docs/decisions.md`.
-- Split mode, arpeggiator, RPS, motion control, ribbon, velocity assign,
-  tempo sync and SysEx are not implemented.
-- About 4 % of one Apple silicon core with eight voices at 48 kHz, 2.7 % of
-  it the fixed output stage. Not measured in Reason or under phdsp64.
+- Direct real-hardware recordings only verify the supersaw at Detune 0 / Mix 0, the saw at its round end, 12 dB low-pass on `A33 JP-303`, tone EQ tilt, feedback howl tuning, and `P14 Feedback Lead` ([measurements](Docs/research/hardware-ab-2026-11-22.md)). Most fine behaviour is fitted/verified against JE-8086 rather than a physical unit (`AnalogColor` DNL `0.75 LSB` and `1.35×` rail are datasheet estimates).
+- Remaining minor black-box deltas vs JE-8086: `Sine Lead` `<300 Hz` (`+3.8 dB` on 100 Hz-aligned pure tone), `Juno Bass Vel` `<300 Hz` (`-2.2 dB`), noise headroom at maximum resonance (`CTRL 2 = 127`), `-24 dB` SVF at resonance 127, and 100 Hz tick phase latency (~11 ms vs ~3 ms) on ultra-fast attacks.
+- **Features not yet implemented / exposed:** `KeyMode::Dual` UI and `VelocityMatrix` UI on the Rack front panel, `Split` key mode, MIDI Control Assign matrix, Arp Beat Patterns, RPS / Motion Control, JP-8080 Distortion / External Audio In / Vocoder, 10-voice option, SysEx `.syx` patch import, and native VST3/AU/CLAP targets.
 
 ## Version history
 
 | Version | Change |
 | --- | --- |
-| 0.9.1 | `AnalogColor`'s DAC truncation treats a word under one DAC step as zero, so a release tail ends in exact silence instead of a -1 step held through the coupling caps for about 20 s (about -108 dBFS; it kept a host's silence detection from settling). |
-| 0.9.0 | Against fresh JE-8086 captures, 19 of 20 factory patches as played within 3 dB per region (was 8): the JP-8080 velocity matrix on the firmware's velocity curve; LEGATO no longer makes a part mono; the noise oscillator 6.5 dB lower. `AnalogColor` (on by default, `Engine::setAnalogColor`): the DAC truncates and carries an R-2R ladder error, and the jack op-amp rounds off peaks near its rail; no noise added, transparent below three quarters of the headroom. |
-| 0.8.0 | Renamed from Hypra to Trancera (owner, 2026-11-23): the `trancera` namespace, `Source/DSP/Trancera*` files, the `TranceraDSP` library and the repository. No change to the sound. |
-| 0.7.1 | The triangle-mod sine table is built at compile time, so the engine holds no global with a run-time initialiser (the Rack Extension toolchain refuses one). No audible change: the table differs from `std::sin` by under 1e-15. |
-| 0.7.0 | `Source/DSP/TranceraControls.h` lists the patch as 57 front-panel controls (ids, ranges, defaults) for every front end, with `applyControl` and `controlValue`; the engine takes a host's master tuning (`setTune`). No change to the sound. |
-| 0.6.2 | Key follow tracks the pitch after OSC SHIFT; LFO 1 and the pitch envelope reach X-MOD on the pitch-depth curve (they were about a hundred times too strong); effect and delay LEVEL are square-law with a per-type chorus wet gain. Found by playing factory patches on JE-8086 and Trancera. |
-| 0.6.1 | Amp SUSTAIN is square-law, as JE-8086 plays it (found by playing ten factory patches on both); the event renderer takes every patch field. |
-| 0.6.0 | TONE CONTROL is the measured pair of first-order shelves (treble from 940 Hz, bass below 435 Hz, up to +29 dB at full bass); delay times, feedback and echo levels follow JE-8086, PANNING SHORT answers right first; the two FREEZE PHASE combs take the measured lengths. |
-| 0.5.0 | Supersaw Detune follows JE-8086 at every value (steps from 34, a steep climb from 120) and its level drops 1.4 dB; ring modulation 3.6 dB quieter; the feedback oscillator howls exactly on the harmonic JE-8086 picks for each HARMONICS setting, from the same AMOUNT. |
-| 0.4.1 | Oscillator SHAPE defaults to 0, as on JE-8086 (it was 64, a brighter wave), and the demo saws use SHAPE 0, the rounder saw of the factory patches, instead of the plain saw at 32. |
-| 0.4.0 | Envelope segments start late (25 ms from 30), short attacks are faster, FADE ramps in decibels, LFO 2 has its own rate, amp LFO, pan, OSC BALANCE (constant power), X-MOD (FM in Hz) and the noise oscillator (the main filter on the key) follow JE-8086. Velocity is off by default, as there. |
-| 0.3.0 | Envelopes, LFO 1 rate and depths, pitch and filter envelope depths, key follow and portamento follow black-box measurements of JE-8086: one exponential time constant per value for attack, decay and release, a glide of fixed time, key follow at half strength below zero. The demo patches keep their old timing under the new tables. |
-| 0.2.0 | The filter, saw SHAPE, pulse width and triangle mod follow black-box measurements of JE-8086: a different filter structure, cutoff a semitone per step, a measured resonance curve, -24 dB as two identical stages. |
-| 0.1.3 | Detune and Mix follow Szabo's measured tables instead of his fitted curves: the sides are 14 % quieter at Mix 0. |
-| 0.1.2 | The saw's round end and the feedback howl's tuning follow factory-patch recordings. |
-| 0.1.1 | The supersaw follows a recorded JP-8080: a four-pole tracked high-pass, which restores its fundamental, and the recorded drift at Detune 0. |
-| 0.1.0 | First proof of concept. |
+| 0.9.2 | Tier 1 upgrades: exposed `filter_velocity` (`-64..63`), added MIDI Channel Aftertouch (`aftertouch_cutoff`, `aftertouch_lfo2`), split Unison into JP-8080 Poly Unison (2 paired voices/note) vs Mono 8-voice Unison with live equal-power `unison_spread` (`0..100%`), added host tempo-synced `delay_sync` (`Free`, `1/32..1/2` with 262,144-sample buffer & dynamic idle threshold), updated A/B (18/20 within ≤ 2 dB, 19/20 within ≤ 2.2 dB), 70 controls, 28/28 Release & ASan/UBSan test suites passing. |
+| 0.9.1d / 69c39be | Q23 fixed-point synthesis/filter/effects paths (`0a8801f`), 4-voice SIMD + rational polyphase resampler + idle gating (`8e310e6`), glitch-free sample-rate smoothing & 256-sample crossfades across all automatable controls (`09c3364`), Unison + live detune and tempo-synced Arpeggiator (`69c39be`), plus solved Triangle SHAPE wavefolder and all 12 Multi-FX Chorus algorithms. |
+| 0.9.1 | `AnalogColor`'s DAC truncation treats a word under one DAC step as zero, so a release tail ends in exact silence instead of a -1 step held through the coupling caps for about 20 s. |
+| 0.9.0 | Against fresh JE-8086 captures, 19 of 20 factory patches as played within 3 dB per region (was 8): JP-8080 velocity matrix on firmware curve, LEGATO polyphonic fix, noise -6.5 dB, switchable `AnalogColor` R-2R DAC + op-amp rail. |
+| 0.8.0 | Renamed from Hypra to Trancera (owner, 2026-11-23): `trancera` namespace, `Source/DSP/Trancera*`, `TranceraDSP`. |
+| 0.7.1 | Compile-time triangle-mod sine table (zero runtime static initialisers for Rack phdsp64). |
+| 0.7.0 | Added `Source/DSP/TranceraControls.h` flat control table and `setTune`. |
+| 0.6.0–0.6.2 | Measured Q23 Tone Control shelves, delay timing/LPF/DC blocker, Freeze combs, square-law amp sustain & FX levels, Key Follow after `OSC SHIFT`, X-Mod modulation depth. |
+| 0.1.0–0.5.0 | Initial proof of concept through full JE-8086 black-box & hardware Super Saw / filter / oscillator / envelope / LFO fitting. |
 
 ## Build
 
 ```sh
 cmake -S . -B build-dsp -DCMAKE_BUILD_TYPE=Release
-cmake --build build-dsp --parallel 2
+cmake --build build-dsp --parallel 4
 ctest --test-dir build-dsp --output-on-failure
 ./build-dsp/TranceraRenderDemos deliverables/demos
 python3 Tools/panel/render_front.py
 ```
 
-The panel script needs Pillow, the macOS Arial fonts and a
-`reason-rack-extension` checkout beside this one for the stock widgets.
-
 ## Licensing
 
-Source-available under the [PolyForm Noncommercial licence](LICENSE). Roland,
-JP-8000 and JP-8080 are trademarks of Roland Corporation, used only to name
-the modelled instrument.
+Source-available under the [PolyForm Noncommercial licence](LICENSE). Roland, JP-8000 and JP-8080 are trademarks of Roland Corporation, used only to name the modelled instrument.

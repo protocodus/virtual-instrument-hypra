@@ -80,6 +80,7 @@ struct EffectParams
     int chorus { 0 };
     DelayType delayType { DelayType::PanLR };
     int delayTime { 64 }, feedback { 40 }, delay { 0 };
+    int delaySync { 0 }; // 0 = Free, 1..11 = 1/32..1/2 synced to host BPM
 };
 
 // JP-8080 velocity matrix (VELOCITY on plus a depth per destination, -127 to
@@ -119,9 +120,12 @@ struct Patch
     int oscShift { 0 };
     int bendUp { 2 }, bendDown { 2 };
     int velocityAmp { 0 }, velocityFilter { 0 }; // [measured] no effect at the JE-8086 defaults
+    int aftertouchCutoff { 0 };                  // -64..63, bipolar filter cutoff offset at full channel pressure
+    int aftertouchLfo2 { 0 };                    // 0..127, scales channel pressure into LFO 2 depth alongside mod wheel
     // JP-8080 only: the JP-8000 has no unison switch.
     bool unison { false };
     int unisonDetune { 12 }; // cents
+    int unisonSpread { 0 };  // 0..100 %, stereo pan spread of unison voices
     ArpParams arp;
     VelocityMatrix velocityMatrix;
 };

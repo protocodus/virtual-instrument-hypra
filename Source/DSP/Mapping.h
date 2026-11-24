@@ -656,6 +656,30 @@ inline double delaySeconds (DelayType type, int time) noexcept
     return d1;
 }
 
+// 0 = Free, 1..11 = 1/32, 1/16T, 1/16, 1/8T, 1/16D, 1/8, 1/4T, 1/8D, 1/4, 1/4D, 1/2
+inline constexpr std::array<double, 12> delaySyncBeats {
+    0.0, 0.125, 1.0 / 6.0, 0.25, 1.0 / 3.0, 0.375, 0.5, 2.0 / 3.0, 0.75, 1.0, 1.5, 2.0
+};
+
+inline double delaySyncedSamples (DelayType type, int syncIndex, double bpm) noexcept
+{
+    const int idx = std::clamp (syncIndex, 1, 11);
+    const double clampedBpm = std::clamp (bpm, 20.0, 300.0);
+    const double echoSamples = (60.0 / clampedBpm) * delaySyncBeats[static_cast<std::size_t> (idx)] * kEngineRate;
+    // Panning types bounce L/R every d1/2 (see delaySeconds); double d1 so each bounce hits the chosen division.
+    switch (type)
+    {
+        case DelayType::PanLR:
+        case DelayType::PanRL:
+        case DelayType::PanShort:
+            return 2.0 * echoSamples;
+        case DelayType::MonoShort:
+        case DelayType::MonoLong:
+            break;
+    }
+    return echoSamples;
+}
+
 inline double delayFeedback (int value) noexcept
 {
     return effectLevel (value);

@@ -321,12 +321,23 @@ void engine()
     check (e.activeVoices() == 1, "no unison with the feedback oscillator");
     fb.unison = false;
     Patch stacked = p;
+    stacked.mono = true;
     stacked.unison = true;
     e.reset();
     e.setPatch (Part::Upper, stacked);
     e.noteOn (60, 100);
     e.render (l, r, 480);
-    check (e.activeVoices() == 8, "unison sounds all eight voices");
+    check (e.activeVoices() == 8, "mono unison sounds all eight voices");
+
+    Patch polyUni = p;
+    polyUni.mono = false;
+    polyUni.unison = true;
+    e.reset();
+    e.setPatch (Part::Upper, polyUni);
+    for (int i = 0; i < 4; ++i)
+        e.noteOn (60 + i * 3, 100);
+    e.render (l, r, 480);
+    check (e.activeVoices() == 8, "poly unison pairs 2 voices per note up to 4 notes (8 voices)");
 
     e.reset();
     e.setMode (KeyMode::Dual);
@@ -1746,15 +1757,17 @@ void automationGlitch()
         Patch startMin = smooth;
         if (ctrl == kChorusType || ctrl == kChorusLevel)
             startMin.effects.chorus = 80;
-        if (ctrl == kDelayType || ctrl == kDelayTime || ctrl == kDelayFeedback || ctrl == kDelayLevel)
+        if (ctrl == kDelayType || ctrl == kDelayTime || ctrl == kDelayFeedback || ctrl == kDelayLevel || ctrl == kDelaySync)
             startMin.effects.delay = 80;
         if (ctrl == kResonance)
         {
             startMin.filter.steep = false;
             startMin.filter.cutoff = 85;
         }
-        if (ctrl == kUnisonDetune)
+        if (ctrl == kUnisonDetune || ctrl == kUnisonSpread)
             startMin.unison = true;
+        if (ctrl == kFilterVelocity || ctrl == kAftertouchCutoff || ctrl == kAftertouchLfo2)
+            startMin.filter.cutoff = 64;
         if (ctrl == kArpMode || ctrl == kArpRange || ctrl == kArpRate || ctrl == kArpGate || ctrl == kArpHold)
             startMin.arp.on = true;
         applyControl (startMin, ctrl, kControls[static_cast<std::size_t> (ctrl)].min);
@@ -1764,8 +1777,14 @@ void automationGlitch()
         applyControl (startMax, ctrl, kControls[static_cast<std::size_t> (ctrl)].max);
 
         const std::string id (kControls[static_cast<std::size_t> (ctrl)].id);
-        const int latUp = verifyStep (id + " min->max", startMin, true, [&] (Engine& e) { e.setPatch (Part::Upper, startMax); });
-        verifyStep (id + " max->min", startMax, true, [&] (Engine& e) { e.setPatch (Part::Upper, startMin); });
+        auto drivePatch = [&] (Engine& e, const Patch& next)
+        {
+            if (ctrl == kAftertouchCutoff || ctrl == kAftertouchLfo2)
+                e.aftertouch (1.0);
+            e.setPatch (Part::Upper, next);
+        };
+        const int latUp = verifyStep (id + " min->max", startMin, true, [&] (Engine& e) { drivePatch (e, startMax); });
+        verifyStep (id + " max->min", startMax, true, [&] (Engine& e) { drivePatch (e, startMin); });
 
         if (ctrl == kCutoff || ctrl == kTreble || ctrl == kLevel || ctrl == kOsc1Wave
             || ctrl == kFilterType || ctrl == kFilterSlope)
@@ -1779,11 +1798,16 @@ void automationGlitch()
     const int latColorOn = verifyStep ("analog_color on", smooth, false, [] (Engine& e) { e.setAnalogColor (true); });
     const int latBend = verifyStep ("pitchBend", smooth, true, [] (Engine& e) { e.pitchBend (-1.0); });
     const int latMod = verifyStep ("modWheel", smooth, true, [] (Engine& e) { e.modWheel (0.0); });
+    Patch atPatch = smooth;
+    atPatch.aftertouchCutoff = 48;
+    atPatch.aftertouchLfo2 = 96;
+    const int latAftertouch = verifyStep ("aftertouch", atPatch, true, [] (Engine& e) { e.aftertouch (1.0); });
     const int latTune = verifyStep ("setTune", smooth, true, [] (Engine& e) { e.setTune (100.0); });
     check (latColorOff >= 0 && latColorOff < 96, "analog_color off immediate pickup");
     check (latColorOn >= 0 && latColorOn < 96, "analog_color on immediate pickup");
     check (latBend >= 0 && latBend < 96, "pitchBend immediate pickup");
     check (latMod >= 0 && latMod < 96, "modWheel immediate pickup");
+    check (latAftertouch >= 0 && latAftertouch < 96, "aftertouch immediate pickup");
     check (latTune >= 0 && latTune < 96, "setTune immediate pickup");
 
     // 3. Fast mid-crossfade reversals.
@@ -1866,6 +1890,7 @@ void unisonAndArp()
         p.balance = -64;
         p.filter = { FilterType::LowPass, true, 110, 0, 0, 0, 0, { 0, 0, 127, 10 } };
         p.amp = { 0, 0, 127, 10 };
+        p.mono = true;
         p.unison = true;
         p.unisonDetune = 0;
 
@@ -2071,13 +2096,397 @@ void unisonAndArp()
     }
 }
 
+void tier1Features()
+{
+    constexpr double hostFs = 48000.0;
+    auto totalRms = [] (const std::vector<float>& L, const std::vector<float>& R, int from, int to)
+    {
+        double sum = 0.0;
+        for (int i = from; i < to; ++i)
+        {
+            const double vl = L[static_cast<std::size_t> (i)];
+            const double vr = R[static_cast<std::size_t> (i)];
+            sum += 0.5 * (vl * vl + vr * vr);
+        }
+        return std::sqrt (sum / std::max (1, to - from));
+    };
+
+    // 1. Filter Velocity (positive, negative, and off).
+    {
+        auto renderVel = [] (int filterVel, int vel)
+        {
+            Patch p;
+            p.osc1 = { Wave1::Saw, 0, 0 };
+            p.balance = -64;
+            p.filter = { FilterType::LowPass, true, 54, 10, 0, 0, 0, { 0, 0, 127, 10 } };
+            p.amp = { 0, 0, 127, 10 };
+            p.velocityFilter = filterVel;
+            Engine e;
+            e.prepare (hostFs, 11u);
+            e.setPatch (Part::Upper, p);
+            e.noteOn (48, vel);
+            std::vector<float> L (24000), R (24000);
+            e.render (L.data(), R.data(), 24000);
+            std::vector<double> x (L.begin() + 4096, L.end());
+            double hf = 0.0;
+            for (double hz = 2000.0; hz <= 6000.0; hz += 250.0)
+                hf += tone (x, hz, hostFs);
+            return std::pair<double, std::vector<float>> { hf, std::move (L) };
+        };
+        const auto [hfPosHigh, posHigh] = renderVel (60, 127);
+        const auto [hfPosLow, posLow] = renderVel (60, 20);
+        const auto [hfNegHigh, negHigh] = renderVel (-60, 127);
+        const auto [hfNegLow, negLow] = renderVel (-60, 20);
+        const auto [hfZeroHigh, zeroHigh] = renderVel (0, 127);
+        const auto [hfZeroLow, zeroLow] = renderVel (0, 20);
+        check (hfPosHigh > hfPosLow * 3.0, "filter_velocity +60 brightens high velocity notes vs low velocity");
+        check (hfNegLow > hfNegHigh * 3.0, "filter_velocity -60 brightens low velocity notes vs high velocity");
+        (void) posHigh; (void) posLow; (void) negHigh; (void) negLow;
+        check (zeroHigh == zeroLow, "filter_velocity 0 keeps note tone velocity-independent");
+    }
+
+    // 2. MIDI Channel Aftertouch -> Filter Cutoff & LFO 2 depth (independent of Mod Wheel).
+    {
+        Patch p;
+        p.osc1 = { Wave1::Saw, 0, 0 };
+        p.balance = -64;
+        p.filter = { FilterType::LowPass, true, 48, 8, 0, 0, 0, { 0, 0, 127, 10 } };
+        p.amp = { 0, 0, 127, 10 };
+        p.aftertouchCutoff = 50;
+        Engine e;
+        e.prepare (hostFs, 22u);
+        e.setPatch (Part::Upper, p);
+        e.noteOn (48, 100);
+        std::vector<float> L (24000), R (24000);
+        e.render (L.data(), R.data(), 12000);
+        const long allocBefore = allocations;
+        countAllocations = true;
+        e.aftertouch (1.0);
+        e.render (L.data() + 12000, R.data() + 12000, 12000);
+        countAllocations = false;
+        check (allocations == allocBefore, "aftertouch updates allocate zero heap memory");
+
+        std::vector<double> pre (L.begin() + 2000, L.begin() + 12000);
+        std::vector<double> post (L.begin() + 14000, L.end());
+        auto sumHf = [&] (const std::vector<double>& s)
+        {
+            double v = 0.0;
+            for (double hz = 2000.0; hz <= 6000.0; hz += 250.0)
+                v += tone (s, hz, hostFs);
+            return v;
+        };
+        check (sumHf (post) > sumHf (pre) * 4.0, "aftertouch_cutoff +50 opens low-pass filter on held key");
+
+        // LFO 2 depth from aftertouch even with modWheel at 0.
+        Patch pLfo;
+        pLfo.osc1 = { Wave1::Triangle, 0, 0 };
+        pLfo.balance = -64;
+        pLfo.filter = { FilterType::LowPass, true, 127, 0, 0, 0, 0, { 0, 0, 127, 10 } };
+        pLfo.amp = { 0, 0, 127, 10 };
+        pLfo.lfo2 = { 96, 48, 0, 0 };
+        pLfo.aftertouchLfo2 = 127;
+        Engine eDry, eAt;
+        eDry.prepare (hostFs, 33u);
+        eAt.prepare (hostFs, 33u);
+        eDry.setPatch (Part::Upper, pLfo);
+        eAt.setPatch (Part::Upper, pLfo);
+        eDry.modWheel (0.0);
+        eAt.modWheel (0.0);
+        eDry.noteOn (69, 100);
+        eAt.noteOn (69, 100);
+        eAt.aftertouch (1.0);
+        std::vector<float> dryL (24000), dryR (24000), atL (24000), atR (24000);
+        eDry.render (dryL.data(), dryR.data(), 24000);
+        eAt.render (atL.data(), atR.data(), 24000);
+        double maxDiff = 0.0;
+        for (int i = 2000; i < 24000; ++i)
+            maxDiff = std::max (maxDiff, static_cast<double> (std::abs (atL[static_cast<std::size_t> (i)] - dryL[static_cast<std::size_t> (i)])));
+        check (maxDiff > 0.15, "aftertouch_lfo2 drives LFO 2 pitch vibrato when modWheel is zero");
+    }
+
+    // 3. Poly Unison (2 voices/note), Mono Unison (8 voices), and Stereo Unison Spread.
+    {
+        Patch p;
+        p.osc1 = { Wave1::Saw, 0, 0 };
+        p.balance = -64;
+        p.filter = { FilterType::LowPass, true, 120, 0, 0, 0, 0, { 0, 0, 127, 2 } };
+        p.amp = { 0, 0, 127, 2 };
+        p.mono = false;
+        p.unison = true;
+        p.unisonDetune = 15;
+        p.unisonSpread = 0;
+
+        Engine e;
+        e.prepare (hostFs, 44u);
+        e.setAnalogColor (false);
+        e.setPatch (Part::Upper, p);
+        std::vector<float> L (24000), R (24000);
+        e.noteOn (60, 100);
+        e.noteOn (64, 100);
+        e.noteOn (67, 100);
+        e.render (L.data(), R.data(), 4800);
+        check (e.activeVoices() == 6, "poly unison 3-note chord engages 6 voices (2 per note)");
+
+        e.noteOn (71, 100);
+        e.render (L.data() + 4800, R.data() + 4800, 4800);
+        check (e.activeVoices() == 8, "poly unison 4-note chord engages all 8 voices");
+
+        e.noteOff (71);
+        e.render (L.data() + 9600, R.data() + 9600, 9600);
+        check (e.activeVoices() == 6, "releasing 1 note in poly unison leaves 6 chord voices active");
+        check (L == R, "unisonSpread 0 produces bit-exact L == R (analogColor off)");
+
+        // Stereo Unison Spread preserves total energy and stays click-free across live sweep.
+        Patch pWide = p;
+        pWide.unisonSpread = 100;
+        Engine eWide;
+        eWide.prepare (hostFs, 44u);
+        eWide.setPatch (Part::Upper, pWide);
+        for (int n : { 60, 64, 67 })
+            eWide.noteOn (n, 100);
+        std::vector<float> wL (24000), wR (24000);
+        eWide.render (wL.data(), wR.data(), 24000);
+        double sideSq = 0.0, midSq = 0.0;
+        for (int i = 4000; i < 24000; ++i)
+        {
+            const double l = wL[static_cast<std::size_t> (i)];
+            const double r = wR[static_cast<std::size_t> (i)];
+            sideSq += (l - r) * (l - r);
+            midSq += (l + r) * (l + r);
+        }
+        const double widthRatio = std::sqrt (sideSq / std::max (midSq, 1e-12));
+        check (widthRatio > 0.25, "unisonSpread 100 produces strong stereo L/R difference");
+
+        Engine eCenter;
+        eCenter.prepare (hostFs, 44u);
+        eCenter.setPatch (Part::Upper, p);
+        for (int n : { 60, 64, 67 })
+            eCenter.noteOn (n, 100);
+        std::vector<float> cL (24000), cR (24000);
+        eCenter.render (cL.data(), cR.data(), 24000);
+        const double wideDb = db (totalRms (wL, wR, 4000, 24000) / std::max (totalRms (cL, cR, 4000, 24000), 1e-12));
+        check (std::abs (wideDb) <= 1.0, "unisonSpread 100 preserves total stereo RMS within +/- 1 dB");
+
+        // Live sweep 0 -> 100 -> 0 in Mono 8-voice Unison (zero allocations, zero clicks).
+        Patch monoWide = p;
+        monoWide.mono = true;
+        monoWide.unison = true;
+        Engine eSweep;
+        eSweep.prepare (hostFs, 55u);
+        eSweep.setPatch (Part::Upper, monoWide);
+        eSweep.noteOn (48, 100);
+        std::vector<float> sL (19200), sR (19200);
+        const long allocBefore = allocations;
+        countAllocations = true;
+        for (int pos = 0; pos < 19200; pos += 64)
+        {
+            if (pos == 6400)
+            {
+                monoWide.unisonSpread = 100;
+                eSweep.setPatch (Part::Upper, monoWide);
+            }
+            if (pos == 12800)
+            {
+                monoWide.unisonSpread = 0;
+                eSweep.setPatch (Part::Upper, monoWide);
+            }
+            eSweep.render (sL.data() + pos, sR.data() + pos, 64);
+        }
+        countAllocations = false;
+        check (allocations == allocBefore, "live unisonSpread sweep allocates zero heap memory");
+        auto maxD2 = [&] (int a, int b)
+        {
+            double m = 0.0;
+            for (int i = std::max (2, a); i < b; ++i)
+            {
+                const double dL = std::abs (static_cast<double> (sL[static_cast<std::size_t> (i)])
+                                            - 2.0 * sL[static_cast<std::size_t> (i - 1)] + sL[static_cast<std::size_t> (i - 2)]);
+                const double dR = std::abs (static_cast<double> (sR[static_cast<std::size_t> (i)])
+                                            - 2.0 * sR[static_cast<std::size_t> (i - 1)] + sR[static_cast<std::size_t> (i - 2)]);
+                m = std::max ({ m, dL, dR });
+            }
+            return m;
+        };
+        const double preD2 = maxD2 (4000, 6400);
+        const double sweepD2 = std::max (maxD2 (6400, 7424), maxD2 (12800, 13824));
+        check (sweepD2 <= std::max (0.015, 2.2 * preD2), "live unisonSpread 0 -> 100 -> 0 is glitch-free");
+    }
+
+    // 4. Delay Tempo Sync (exact timing, PanLR stereo bounce, tempo change, long tail, and Free passthrough).
+    {
+        auto findEchoFrame = [&] (const std::vector<float>& ch, int minFrame, int maxFrame)
+        {
+            int best = minFrame;
+            double bestAbs = -1.0;
+            for (int i = minFrame; i < std::min (maxFrame, static_cast<int> (ch.size())); ++i)
+            {
+                const double v = std::abs (static_cast<double> (ch[static_cast<std::size_t> (i)]));
+                if (v > bestAbs)
+                {
+                    bestAbs = v;
+                    best = i;
+                }
+            }
+            return std::pair<int, double> { best, bestAbs };
+        };
+
+        Patch dp;
+        dp.osc1 = { Wave1::Triangle, 0, 0 };
+        dp.balance = -64;
+        dp.filter = { FilterType::LowPass, true, 127, 0, 0, 0, 0, { 0, 0, 127, 0 } };
+        dp.amp = { 0, 0, 127, 0 };
+        dp.effects.delayType = DelayType::MonoLong;
+        dp.effects.delaySync = 8; // 1/8D = 0.75 beat: 0.375 s (18000 frames @ 48 kHz) at 120 BPM
+        dp.effects.delay = 127;
+        dp.effects.feedback = 0;
+
+        Engine eMono;
+        eMono.prepare (hostFs, 66u);
+        eMono.setAnalogColor (false);
+        eMono.setOutputNode (OutputNode::Digital);
+        eMono.setTempo (120.0);
+        eMono.setPatch (Part::Upper, dp);
+        eMono.noteOn (69, 127);
+        std::vector<float> mL (48000), mR (48000);
+        eMono.render (mL.data(), mR.data(), 1000);
+        eMono.noteOff (69);
+        eMono.render (mL.data() + 1000, mR.data() + 1000, 47000);
+        const auto [monoPeak, monoMag] = findEchoFrame (mL, 10000, 30000);
+        near (static_cast<double> (monoPeak), 18000.0, 200.0, "MonoLong 1/8D echo at 120 BPM lands at 18000 frames");
+        check (monoMag > 0.05, "MonoLong 1/8D echo is clearly audible");
+
+        // Tempo change 120 -> 180 BPM shifts 1/8D echo from 18000 to 12000 frames.
+        eMono.setTempo (180.0);
+        std::vector<float> warmL (24000), warmR (24000);
+        eMono.render (warmL.data(), warmR.data(), 24000); // let delay time finish slewing & old buffer clear
+        std::vector<float> fL (48000), fR (48000);
+        eMono.noteOn (69, 127);
+        eMono.render (fL.data(), fR.data(), 1000);
+        eMono.noteOff (69);
+        eMono.render (fL.data() + 1000, fR.data() + 1000, 47000);
+        const auto [fastPeak, fastMag] = findEchoFrame (fL, 8000, 22000);
+        near (static_cast<double> (fastPeak), 12000.0, 200.0, "MonoLong 1/8D echo at 180 BPM lands at 12000 frames");
+        check (fastMag > 0.05, "180 BPM synced echo is audible");
+
+        // PanLR 1/8D at 120 BPM: Left first echo at 18000, Right first echo at 36000.
+        Patch panP = dp;
+        panP.effects.delayType = DelayType::PanLR;
+        Engine ePan;
+        ePan.prepare (hostFs, 66u);
+        ePan.setAnalogColor (false);
+        ePan.setOutputNode (OutputNode::Digital);
+        ePan.setTempo (120.0);
+        ePan.setPatch (Part::Upper, panP);
+        ePan.noteOn (69, 127);
+        std::vector<float> pL (48000), pR (48000);
+        ePan.render (pL.data(), pR.data(), 1000);
+        ePan.noteOff (69);
+        ePan.render (pL.data() + 1000, pR.data() + 1000, 47000);
+        const auto [panLPk, panLMag] = findEchoFrame (pL, 12000, 24000);
+        const auto [panRPk, panRMag] = findEchoFrame (pR, 30000, 42000);
+        near (static_cast<double> (panLPk), 18000.0, 200.0, "PanLR 1/8D L bounce at 120 BPM lands at 18000 frames");
+        near (static_cast<double> (panRPk), 36000.0, 200.0, "PanLR 1/8D R bounce at 120 BPM lands at 36000 frames");
+        check (panLMag > 0.05 && panRMag > 0.05, "PanLR synced bounces are audible");
+
+        // Long synced delay: PanLR at 1/2 note (2.0 beats = 1.0 s L, 2.0 s R @ 120 BPM -> 96000 frames)
+        // must survive without idle-gate cutoff.
+        Patch longP = dp;
+        longP.effects.delayType = DelayType::PanLR;
+        longP.effects.delaySync = 11; // 1/2
+        Engine eLong;
+        eLong.prepare (hostFs, 66u);
+        eLong.setAnalogColor (false);
+        eLong.setOutputNode (OutputNode::Digital);
+        eLong.setTempo (120.0);
+        eLong.setPatch (Part::Upper, longP);
+        eLong.noteOn (69, 127);
+        std::vector<float> lL (120000), lR (120000);
+        eLong.render (lL.data(), lR.data(), 1000);
+        eLong.noteOff (69);
+        eLong.render (lL.data() + 1000, lR.data() + 1000, 119000);
+        const auto [longRPk, longRMag] = findEchoFrame (lR, 90000, 102000);
+        near (static_cast<double> (longRPk), 96000.0, 250.0, "PanLR 1/2 right bounce at 2.0 s survives idle gating");
+        check (longRMag > 0.05, "PanLR 1/2 right bounce has full amplitude");
+
+        // delaySync == 0 behaves identically to Free delay regardless of tempo.
+        Patch freeP = dp;
+        freeP.effects.delaySync = 0;
+        Engine eA, eB;
+        eA.prepare (hostFs, 77u);
+        eB.prepare (hostFs, 77u);
+        eA.setTempo (90.0);
+        eB.setTempo (180.0);
+        eA.setPatch (Part::Upper, freeP);
+        eB.setPatch (Part::Upper, freeP);
+        eA.noteOn (60, 100);
+        eB.noteOn (60, 100);
+        std::vector<float> aL (16000), aR (16000), bL (16000), bR (16000);
+        eA.render (aL.data(), aR.data(), 16000);
+        eB.render (bL.data(), bR.data(), 16000);
+        check (aL == bL && aR == bR, "delaySync 0 ignores tempo bit-identically");
+    }
+
+    // 5. Block-size independence across all Tier 1 features active together.
+    {
+        auto runCombined = [] (int chunk)
+        {
+            Patch p;
+            p.osc1 = { Wave1::SuperSaw, 50, 80 };
+            p.balance = -64;
+            p.filter = { FilterType::LowPass, true, 64, 30, 0, 0, 0, { 0, 10, 80, 20 } };
+            p.lfo2 = { 70, 20, 20, 0 };
+            p.velocityFilter = 48;
+            p.aftertouchCutoff = 40;
+            p.aftertouchLfo2 = 90;
+            p.mono = false;
+            p.unison = true;
+            p.unisonDetune = 18;
+            p.unisonSpread = 85;
+            p.effects.delayType = DelayType::PanLR;
+            p.effects.delaySync = 6; // 1/8
+            p.effects.delay = 60;
+            p.effects.feedback = 35;
+
+            Engine e;
+            e.prepare (hostFs, 88u);
+            e.setTempo (138.0);
+            e.setPatch (Part::Upper, p);
+            e.noteOn (60, 110);
+            e.noteOn (64, 95);
+            e.noteOn (67, 120);
+            constexpr int len = 18000;
+            std::vector<float> outL (len), outR (len);
+            int pos = 0;
+            bool atOn = false;
+            while (pos < len)
+            {
+                if (! atOn && pos >= 6000)
+                {
+                    atOn = true;
+                    e.aftertouch (0.75);
+                }
+                const int nextEvt = atOn ? len : 6000;
+                const int step = std::min ({ chunk, nextEvt - pos, len - pos });
+                e.render (outL.data() + pos, outR.data() + pos, step);
+                pos += step;
+            }
+            return std::pair<std::vector<float>, std::vector<float>> { std::move (outL), std::move (outR) };
+        };
+        const auto [t1L, t1R] = runCombined (1);
+        const auto [t64L, t64R] = runCombined (64);
+        const auto [t997L, t997R] = runCombined (997);
+        check (t1L == t64L && t1R == t64R && t1L == t997L && t1R == t997R,
+               "Tier 1 combined features are bit-identical across block sizes 1, 64, and 997");
+    }
+}
+
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
         { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy }, { "AnalogColor", analogColor },
-        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch }, { "UnisonAndArp", unisonAndArp } };
+        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch }, { "UnisonAndArp", unisonAndArp }, { "Tier1Features", tier1Features } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

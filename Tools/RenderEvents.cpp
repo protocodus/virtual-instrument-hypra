@@ -28,16 +28,17 @@ bool set (Patch& p, const std::string& name, int v)
         { "fenv.a", &p.filter.env.attack }, { "fenv.d", &p.filter.env.decay },
         { "fenv.s", &p.filter.env.sustain }, { "fenv.r", &p.filter.env.release },
         { "amp.a", &p.amp.attack }, { "amp.d", &p.amp.decay }, { "amp.s", &p.amp.sustain },
-        { "amp.r", &p.amp.release }, { "level", &p.level }, { "velocityamp", &p.velocityAmp },
+        { "amp.r", &p.amp.release }, { "level", &p.level }, { "velocityamp", &p.velocityAmp }, { "velocityfilter", &p.velocityFilter },
         { "bass", &p.effects.bass }, { "treble", &p.effects.treble }, { "osc2.range", &p.osc2.range },
         { "pitchlfo", &p.pitchLfo }, { "lfo1.rate", &p.lfo1.rate }, { "filterlfo", &p.filter.lfoDepth },
         { "pitchenv", &p.pitchEnvDepth }, { "pitchenv.a", &p.pitchAttack }, { "pitchenv.d", &p.pitchDecay },
         { "portamento.time", &p.portamentoTime }, { "lfo1.fade", &p.lfo1.fade }, { "lfo2.rate", &p.lfo2.rate },
         { "lfo2.pitch", &p.lfo2.pitch }, { "lfo2.filter", &p.lfo2.filter }, { "lfo2.amp", &p.lfo2.amp },
         { "xmod", &p.xmod }, { "amplfo", &p.ampLfo }, { "chorus", &p.effects.chorus },
-        { "delay.time", &p.effects.delayTime }, { "delay.feedback", &p.effects.feedback }, { "delay", &p.effects.delay },
+        { "delay.time", &p.effects.delayTime }, { "delay.feedback", &p.effects.feedback }, { "delay", &p.effects.delay }, { "delay.sync", &p.effects.delaySync },
         { "osc2.fine", &p.osc2.fine }, { "osc2.pw", &p.osc2.pulseWidth }, { "osc2.pwm", &p.osc2.pwmDepth },
-        { "oscshift", &p.oscShift }, { "unison.detune", &p.unisonDetune },
+        { "oscshift", &p.oscShift }, { "unison.detune", &p.unisonDetune }, { "unison.spread", &p.unisonSpread },
+        { "aftertouch.cutoff", &p.aftertouchCutoff }, { "aftertouch.lfo2", &p.aftertouchLfo2 },
         { "vel.lfo1Rate", &p.velocityMatrix.lfo1Rate },
         { "vel.lfo1Fade", &p.velocityMatrix.lfo1Fade },
         { "vel.lfo2Rate", &p.velocityMatrix.lfo2Rate },
@@ -181,6 +182,18 @@ int main (int argc, char** argv)
             double v;
             words >> v;
             engine->modWheel (v / 127.0);
+        }
+        else if (kind == "aftertouch")
+        {
+            double v;
+            words >> v;
+            engine->aftertouch (v / 127.0);
+        }
+        else if (kind == "tempo")
+        {
+            double bpm;
+            words >> bpm;
+            engine->setTempo (bpm);
         }
         else if (kind == "node")
         {

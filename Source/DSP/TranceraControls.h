@@ -34,6 +34,7 @@ enum Control : int
     kBass, kTreble, kChorusType, kChorusLevel, kDelayType, kDelayTime, kDelayFeedback, kDelayLevel,
     kMono, kLegato, kPortamento, kPortamentoTime, kOscShift, kBendRange, kVelocity,
     kUnison, kUnisonDetune, kArp, kArpMode, kArpRange, kArpRate, kArpGate, kArpHold,
+    kFilterVelocity, kAftertouchCutoff, kAftertouchLfo2, kUnisonSpread, kDelaySync,
     kControlCount
 };
 
@@ -105,6 +106,11 @@ inline constexpr std::array<ControlInfo, kControlCount> kControls { {
     { "arp_rate", "Arp Rate", 0, 7, 5, 8 },
     { "arp_gate", "Arp Gate", 10, 100, 75, 0 },
     { "arp_hold", "Arp Hold", 0, 1, 0, 2 },
+    { "filter_velocity", "Filter Velocity", -64, 63, 0, 0 },
+    { "aftertouch_cutoff", "Aftertouch Cutoff", -64, 63, 0, 0 },
+    { "aftertouch_lfo2", "Aftertouch LFO 2", 0, 127, 0, 0 },
+    { "unison_spread", "Unison Spread", 0, 100, 0, 0 },
+    { "delay_sync", "Delay Sync", 0, 11, 0, 12 },
 } };
 
 // The patch with one control set; out-of-range values are clamped.
