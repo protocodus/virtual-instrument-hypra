@@ -20,6 +20,8 @@ public:
         decayRate_ = mapping::envRateTable[static_cast<std::size_t> (decayVal_)];
         releaseRate_ = mapping::envRateTable[static_cast<std::size_t> (releaseVal_)];
         sustain_ = static_cast<std::int32_t> (std::llround (std::clamp (sustain, 0.0, 1.0) * static_cast<double> (kOne)));
+        if (stage_ == Stage::Sustain)
+            value_ = sustain_;
     }
 
     void trigger (bool lfoActive = false, bool lfoEdge = false, bool useEnvSpeed = true) noexcept

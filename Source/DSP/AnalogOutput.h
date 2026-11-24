@@ -61,10 +61,17 @@ public:
     void setColor (const AnalogColor& color) noexcept
     {
         color_ = color;
-        rail_ = color_.on ? color_.opAmpHeadroom : 0.0;
+        rail_ = color_.opAmpHeadroom;
         knee_ = 0.75 * rail_;
-        buildLadder (ladderL_, 0x54524E43u, color.dacDnlLsb);
-        buildLadder (ladderR_, 0x54524E44u, color.dacDnlLsb);
+        if (color.dacDnlLsb != builtDnlLsb_)
+        {
+            buildLadder (ladderL_, 0x54524E43u, color.dacDnlLsb);
+            buildLadder (ladderR_, 0x54524E44u, color.dacDnlLsb);
+            builtDnlLsb_ = color.dacDnlLsb;
+        }
+        colorTarget_ = color_.on ? 256 : 0;
+        if (! hasRendered_)
+            colorMix_ = colorTarget_;
     }
     const AnalogColor& color() const noexcept { return color_; }
 
@@ -101,37 +108,74 @@ public:
         z_.fill (Double2::zero());
         couplingX_.fill (Double2::zero());
         couplingY_.fill (Double2::zero());
+        colorMix_ = colorTarget_;
+        hasRendered_ = false;
     }
 
     // One 88.2 kHz DAC word in, the jack voltage out at 88.2 kHz.
     Stereo process (Stereo word) noexcept
     {
+        hasRendered_ = true;
+        if (colorMix_ != colorTarget_)
+        {
+            colorMix_ += colorTarget_ > colorMix_ ? 1 : -1;
+            const double a = static_cast<double> (colorMix_) / 256.0;
+            const double cleanL = convertClean (word.l), colorL = convertColored (word.l, ladderL_);
+            const double cleanR = convertClean (word.r), colorR = convertColored (word.r, ladderR_);
+            const Double2 v = Double2::make (cleanL + a * (colorL - cleanL), cleanR + a * (colorR - cleanR));
+            if (node_ == OutputNode::Digital)
+                return { v[0], v[1] };
+            return node_ == OutputNode::KeyboardAsPrinted ? runAnalogSampleFade<true> (v, a)
+                                                          : runAnalogSampleFade<false> (v, a);
+        }
         return finishAnalog (Double2::make (convert (word.l, ladderL_), convert (word.r, ladderR_)));
     }
 
     Stereo processQ23 (StereoQ23 word) noexcept
     {
+        hasRendered_ = true;
+        if (colorMix_ != colorTarget_)
+        {
+            colorMix_ += colorTarget_ > colorMix_ ? 1 : -1;
+            const double a = static_cast<double> (colorMix_) / 256.0;
+            const double cleanL = convertCleanQ23 (word.l), colorL = convertColoredQ23 (word.l, ladderL_);
+            const double cleanR = convertCleanQ23 (word.r), colorR = convertColoredQ23 (word.r, ladderR_);
+            const Double2 v = Double2::make (cleanL + a * (colorL - cleanL), cleanR + a * (colorR - cleanR));
+            if (node_ == OutputNode::Digital)
+                return { v[0], v[1] };
+            return node_ == OutputNode::KeyboardAsPrinted ? runAnalogSampleFade<true> (v, a)
+                                                          : runAnalogSampleFade<false> (v, a);
+        }
         return finishAnalog (Double2::make (convertQ23 (word.l, ladderL_), convertQ23 (word.r, ladderR_)));
     }
 
     void processBlockQ23 (const StereoQ23* in, Stereo* out, int n) noexcept
     {
+        hasRendered_ = true;
+        int i = 0;
+        while (i < n && colorMix_ != colorTarget_)
+        {
+            out[i] = processQ23 (in[i]);
+            ++i;
+        }
+        if (i >= n)
+            return;
         if (node_ == OutputNode::Digital)
         {
-            for (int i = 0; i < n; ++i)
+            for (; i < n; ++i)
                 out[i] = { convertQ23 (in[i].l, ladderL_), convertQ23 (in[i].r, ladderR_) };
             return;
         }
         const bool hasPanel = node_ == OutputNode::KeyboardAsPrinted;
         const bool hasRail = color_.on && rail_ > 0.0;
         if (! hasPanel && hasRail)
-            processAnalogBlock<false, true> (in, out, n);
+            processAnalogBlock<false, true> (in + i, out + i, n - i);
         else if (! hasPanel && ! hasRail)
-            processAnalogBlock<false, false> (in, out, n);
+            processAnalogBlock<false, false> (in + i, out + i, n - i);
         else if (hasPanel && hasRail)
-            processAnalogBlock<true, true> (in, out, n);
+            processAnalogBlock<true, true> (in + i, out + i, n - i);
         else
-            processAnalogBlock<true, false> (in, out, n);
+            processAnalogBlock<true, false> (in + i, out + i, n - i);
     }
 
     // Continuous-time response, without the DAC's sample-and-hold droop.
@@ -207,10 +251,11 @@ private:
         };
     }
 
-    template <bool HasPanel, bool HasRail>
+    template <bool HasPanel, bool HasRail, bool HasFade = false>
     TRANCERA_FORCE_INLINE Double2 stepAnalog8x (Double2 x, const StageCoeffs& c,
                                                 Double2& bz, Double2& jz, Double2& pz,
-                                                Double2& z0, Double2& z1, Double2& z2) noexcept
+                                                Double2& z0, Double2& z1, Double2& z2,
+                                                double colorAlpha = 1.0) noexcept
     {
         const Double2 bufPre0 = c.bB0 * x;
         const Double2 bufPre1 = c.bB1 * x;
@@ -251,9 +296,18 @@ private:
                     z2 = Double2::mulSub (c.skB3 * xs, c.skA2, y);
                     if constexpr (HasRail)
                     {
-                        sub[k] = (fastAbs (y[0]) <= c.knee && fastAbs (y[1]) <= c.knee)
-                                     ? y
-                                     : Double2::make (swing (y[0], c.rail), swing (y[1], c.rail));
+                        if (fastAbs (y[0]) <= c.knee && fastAbs (y[1]) <= c.knee)
+                        {
+                            sub[k] = y;
+                        }
+                        else
+                        {
+                            const Double2 swung = Double2::make (swing (y[0], c.rail), swing (y[1], c.rail));
+                            if constexpr (HasFade)
+                                sub[k] = y + colorAlpha * (swung - y);
+                            else
+                                sub[k] = swung;
+                        }
                     }
                     else
                     {
@@ -268,8 +322,8 @@ private:
         return down_.downsampleOuter (outerResults[0], outerResults[1]);
     }
 
-    template <bool HasPanel, bool HasRail>
-    Stereo runAnalogSample (Double2 v) noexcept
+    template <bool HasPanel, bool HasRail, bool HasFade = false>
+    Stereo runAnalogSample (Double2 v, double colorAlpha = 1.0) noexcept
     {
         const double cGain = couplingGain_, cPole = couplingPole_;
         Double2 x = v;
@@ -283,7 +337,7 @@ private:
         const StageCoeffs c = loadStageCoeffs();
         Double2 bz = buffer_.z, jz = jack_.z, pz = panel_.z;
         Double2 z0 = z_[0], z1 = z_[1], z2 = z_[2];
-        const Double2 out = stepAnalog8x<HasPanel, HasRail> (x, c, bz, jz, pz, z0, z1, z2);
+        const Double2 out = stepAnalog8x<HasPanel, HasRail, HasFade> (x, c, bz, jz, pz, z0, z1, z2, colorAlpha);
         buffer_.z = bz;
         jack_.z = jz;
         if constexpr (HasPanel)
@@ -292,6 +346,14 @@ private:
             (void) pz;
         z_[0] = z0; z_[1] = z1; z_[2] = z2;
         return { out[0], out[1] };
+    }
+
+    template <bool HasPanel>
+    Stereo runAnalogSampleFade (Double2 v, double colorAlpha) noexcept
+    {
+        if (rail_ > 0.0)
+            return runAnalogSample<HasPanel, true, true> (v, colorAlpha);
+        return runAnalogSample<HasPanel, false, false> (v, 0.0);
     }
 
     template <bool HasPanel, bool HasRail>
@@ -390,10 +452,13 @@ private:
             e *= scale;
     }
 
-    double convert (double x, const std::array<double, 256>& ladder) const noexcept
+    static double convertClean (double x) noexcept
     {
-        if (! color_.on || node_ == OutputNode::Digital)
-            return std::clamp (std::nearbyint (x * 131072.0), -131072.0, 131071.0) / 131072.0;
+        return std::clamp (std::nearbyint (x * 131072.0), -131072.0, 131071.0) / 131072.0;
+    }
+
+    static double convertColored (double x, const std::array<double, 256>& ladder) noexcept
+    {
         // The DSP's 24-bit word framed to 18 bits by dropping its low bits (a
         // floor), and the ladder's error for the code's upper eight bits.
         // [inferred] A word under one DAC step either side is the DSP's settled
@@ -408,19 +473,34 @@ private:
         return code / 131072.0 + ladder[segment];
     }
 
-    double convertQ23 (Q23 w, const std::array<double, 256>& ladder) const noexcept
+    double convert (double x, const std::array<double, 256>& ladder) const noexcept
     {
         if (! color_.on || node_ == OutputNode::Digital)
-        {
-            const std::int32_t rounded = w >= 0 ? (w + 32) / 64 : -((-w + 32) / 64);
-            return static_cast<double> (std::clamp (rounded, -131072, 131071)) * (1.0 / 131072.0);
-        }
+            return convertClean (x);
+        return convertColored (x, ladder);
+    }
+
+    static double convertCleanQ23 (Q23 w) noexcept
+    {
+        const std::int32_t rounded = w >= 0 ? (w + 32) / 64 : -((-w + 32) / 64);
+        return static_cast<double> (std::clamp (rounded, -131072, 131071)) * (1.0 / 131072.0);
+    }
+
+    static double convertColoredQ23 (Q23 w, const std::array<double, 256>& ladder) noexcept
+    {
         // Frame the 24-bit signed word to 18 bits via arithmetic truncation.
         if (w > -64 && w < 64)
             return 0.0;
         const std::int32_t code = std::clamp (w >> 6, -131072, 131071);
         const auto segment = static_cast<std::size_t> ((code + 131072) >> 10);
         return static_cast<double> (code) * (1.0 / 131072.0) + ladder[segment];
+    }
+
+    double convertQ23 (Q23 w, const std::array<double, 256>& ladder) const noexcept
+    {
+        if (! color_.on || node_ == OutputNode::Digital)
+            return convertCleanQ23 (w);
+        return convertColoredQ23 (w, ladder);
     }
 
     static double swing (double u, double rail) noexcept
@@ -441,6 +521,9 @@ private:
     std::array<Double2, 4> couplingX_ {}, couplingY_ {};
     double normalise_ { 1.0 }, couplingPole_ { 1.0 }, couplingGain_ { 1.0 };
     AnalogColor color_;
+    double builtDnlLsb_ { -1.0 };
+    int colorMix_ { 256 }, colorTarget_ { 256 };
+    bool hasRendered_ { false };
     double rail_ { 1.35 }, knee_ { 0.75 * 1.35 };
     std::array<double, 256> ladderL_ {}, ladderR_ {};
 };

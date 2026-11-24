@@ -17,7 +17,9 @@ public:
         low_ = { 0, 0 };
         band_ = { 0, 0 };
         stage1Prev_ = 0;
-        fMoving_ = qMoving_ = false;
+        oldLow1_ = oldBand1_ = oldStage1Prev_ = 0;
+        modeFade_ = 0;
+        fMoving_ = qMoving_ = compMoving_ = false;
         fresh_ = true;
         lowD_ = { 0.0, 0.0 };
         bandD_ = { 0.0, 0.0 };
@@ -48,28 +50,61 @@ public:
     void configureQ23 (Q23 fTarget, Q23 qHalfTarget, Q23 comp12, FilterType type, bool steep,
                        Q23 fSmoothAlpha = 1 << 14, Q23 qSmoothAlpha = 1 << 14) noexcept
     {
-        type_ = type;
-        steep_ = steep;
         fAlpha_ = splitCoeff15 (std::clamp (fSmoothAlpha, 1, kQ23Max));
         qAlpha_ = splitCoeff15 (std::clamp (qSmoothAlpha, 1, kQ23Max));
         fTarget_ = std::clamp (fTarget, 8192, kQ23Max);
         qHalfTarget_ = std::clamp (qHalfTarget, 0, kQ23One >> 1);
-        comp12Split_ = splitCoeff15 (std::clamp (comp12, 0, kQ23One));
+        comp12Target_ = std::clamp (comp12, 0, kQ23One);
         if (fresh_)
         {
+            type_ = prevType_ = type;
+            steep_ = prevSteep_ = steep;
             f_ = fTarget_;
             qHalf_ = qHalfTarget_;
+            comp12_ = comp12Target_;
             fc_ = splitCoeff15 (f_);
             qc_ = splitCoeff15 (qHalf_);
-            fMoving_ = qMoving_ = false;
+            comp12Split_ = splitCoeff15 (comp12_);
+            oldLow1_ = oldBand1_ = oldStage1Prev_ = 0;
+            modeFade_ = 0;
+            fMoving_ = qMoving_ = compMoving_ = false;
             fresh_ = false;
         }
         else
         {
+            if (type != type_ || steep != steep_)
+            {
+                if (modeFade_ > 0 && type == prevType_ && steep == prevSteep_)
+                {
+                    std::swap (low_[1], oldLow1_);
+                    std::swap (band_[1], oldBand1_);
+                    std::swap (stage1Prev_, oldStage1Prev_);
+                    prevType_ = type_;
+                    prevSteep_ = steep_;
+                    type_ = type;
+                    steep_ = steep;
+                    modeFade_ = 256 - modeFade_;
+                }
+                else
+                {
+                    prevType_ = type_;
+                    prevSteep_ = steep_;
+                    oldLow1_ = low_[1];
+                    oldBand1_ = band_[1];
+                    oldStage1Prev_ = stage1Prev_;
+                    low_[1] = band_[1] = stage1Prev_ = 0;
+                    type_ = type;
+                    steep_ = steep;
+                    modeFade_ = 256;
+                }
+            }
             fMoving_ = f_ != fTarget_;
             qMoving_ = qHalf_ != qHalfTarget_;
+            compMoving_ = comp12_ != comp12Target_;
         }
     }
+
+    bool isFastBatchSafe() const noexcept { return modeFade_ == 0; }
 
     Q23 processQ23 (Q23 x) noexcept
     {
@@ -95,10 +130,48 @@ public:
                 qc_ = splitCoeff15 (qHalf_);
             }
         }
+        if (compMoving_)
+        {
+            const std::int32_t diff = comp12Target_ - comp12_;
+            std::int32_t step = mulSplit15 (diff, qAlpha_.hi, qAlpha_.lo);
+            if (step == 0 && diff != 0)
+                step = diff > 0 ? 1 : -1;
+            comp12_ = std::clamp (comp12_ + step, 0, kQ23One);
+            comp12Split_ = splitCoeff15 (comp12_);
+            compMoving_ = comp12_ != comp12Target_;
+        }
 
         low_[0] = sat24 (low_[0] + mulSplit15 (band_[0], fc_.hi, fc_.lo));
         const Q23 h0 = sat24 (x - sat24 (low_[0] + mulSplit15x2 (band_[0], qc_.hi, qc_.lo)));
         band_[0] = sat24 (band_[0] + mulSplit15 (h0, fc_.hi, fc_.lo));
+
+        if (modeFade_ > 0)
+        {
+            auto pick1 = [&] (FilterType ft) noexcept -> Q23
+            {
+                return ft == FilterType::LowPass ? low_[0] : (ft == FilterType::BandPass ? band_[0] : h0);
+            };
+            auto stepStage2 = [&] (Q23 in1, Q23& l1, Q23& b1, Q23& prev1, FilterType ft) noexcept -> Q23
+            {
+                const Q23 s2In = prev1;
+                prev1 = in1;
+                l1 = sat24 (l1 + mulSplit15 (b1, fc_.hi, fc_.lo));
+                const Q23 h1 = sat24 (mulSplit15x2 (s2In, qc_.hi, qc_.lo) - sat24 (l1 + mulSplit15x2 (b1, qc_.hi, qc_.lo)));
+                b1 = sat24 (b1 + mulSplit15 (h1, fc_.hi, fc_.lo));
+                return ft == FilterType::LowPass ? l1 : (ft == FilterType::BandPass ? b1 : h1);
+            };
+            const Q23 yOld1 = pick1 (prevType_);
+            const Q23 yNew1 = pick1 (type_);
+            const Q23 oldOut = prevSteep_ ? stepStage2 (yOld1, oldLow1_, oldBand1_, oldStage1Prev_, prevType_)
+                                          : sat24 (mulSplit15 (yOld1, comp12Split_.hi, comp12Split_.lo));
+            const Q23 newOut = steep_ ? stepStage2 (yNew1, low_[1], band_[1], stage1Prev_, type_)
+                                      : sat24 (mulSplit15 (yNew1, comp12Split_.hi, comp12Split_.lo));
+            const Q23 out = static_cast<Q23> ((static_cast<std::int64_t> (oldOut) * modeFade_
+                                               + static_cast<std::int64_t> (newOut) * (256 - modeFade_)) >> 8);
+            --modeFade_;
+            return out;
+        }
+
         const Q23 y = type_ == FilterType::LowPass ? low_[0]
                     : type_ == FilterType::BandPass ? band_[0] : h0;
         if (! steep_)
@@ -116,26 +189,41 @@ public:
 
     void processBlockQ23 (Q23* buf, int n) noexcept
     {
+        int i = 0;
+        while (i < n && (modeFade_ > 0 || compMoving_))
+        {
+            buf[i] = processQ23 (buf[i]);
+            ++i;
+        }
+        if (i >= n)
+            return;
         if (! steep_)
         {
             switch (type_)
             {
-                case FilterType::LowPass:  runBlockImpl<false, FilterType::LowPass> (buf, n); break;
-                case FilterType::BandPass: runBlockImpl<false, FilterType::BandPass> (buf, n); break;
-                case FilterType::HighPass: runBlockImpl<false, FilterType::HighPass> (buf, n); break;
+                case FilterType::LowPass:  runBlockImpl<false, FilterType::LowPass> (buf + i, n - i); break;
+                case FilterType::BandPass: runBlockImpl<false, FilterType::BandPass> (buf + i, n - i); break;
+                case FilterType::HighPass: runBlockImpl<false, FilterType::HighPass> (buf + i, n - i); break;
             }
             return;
         }
         switch (type_)
         {
-            case FilterType::LowPass:  runBlockImpl<true, FilterType::LowPass> (buf, n); break;
-            case FilterType::BandPass: runBlockImpl<true, FilterType::BandPass> (buf, n); break;
-            case FilterType::HighPass: runBlockImpl<true, FilterType::HighPass> (buf, n); break;
+            case FilterType::LowPass:  runBlockImpl<true, FilterType::LowPass> (buf + i, n - i); break;
+            case FilterType::BandPass: runBlockImpl<true, FilterType::BandPass> (buf + i, n - i); break;
+            case FilterType::HighPass: runBlockImpl<true, FilterType::HighPass> (buf + i, n - i); break;
         }
     }
 
     static void process4BlockQ23 (Filter* const f[4], Q23* const bufs[4], int n, FilterType type, bool steep) noexcept
     {
+        if (! f[0]->isFastBatchSafe() || ! f[1]->isFastBatchSafe()
+            || ! f[2]->isFastBatchSafe() || ! f[3]->isFastBatchSafe())
+        {
+            for (int k = 0; k < 4; ++k)
+                f[k]->processBlockQ23 (bufs[k], n);
+            return;
+        }
         if (! steep)
         {
             switch (type)
@@ -258,6 +346,12 @@ private:
         const Int32x4 mask7f = Int32x4::splat (0x7f);
         Int32x4 prevF = fCur, prevQ = qCur;
 
+        const bool compAny = ! Steep && (f[0]->compMoving_ || f[1]->compMoving_ || f[2]->compMoving_ || f[3]->compMoving_);
+        std::array<Q23, 4> compCur { f[0]->comp12_, f[1]->comp12_, f[2]->comp12_, f[3]->comp12_ };
+        const std::array<Q23, 4> compTgt { f[0]->comp12Target_, f[1]->comp12Target_, f[2]->comp12Target_, f[3]->comp12Target_ };
+        Int32x4 compHi = Int32x4::make (f[0]->comp12Split_.hi, f[1]->comp12Split_.hi, f[2]->comp12Split_.hi, f[3]->comp12Split_.hi);
+        Int32x4 compLo = Int32x4::make (f[0]->comp12Split_.lo, f[1]->comp12Split_.lo, f[2]->comp12Split_.lo, f[3]->comp12Split_.lo);
+
         for (int i = 0; i < n; ++i)
         {
             if (fAny)
@@ -284,8 +378,22 @@ private:
             Int32x4 out;
             if constexpr (! Steep)
             {
-                const Int32x4 compHi = Int32x4::make (f[0]->comp12Split_.hi, f[1]->comp12Split_.hi, f[2]->comp12Split_.hi, f[3]->comp12Split_.hi);
-                const Int32x4 compLo = Int32x4::make (f[0]->comp12Split_.lo, f[1]->comp12Split_.lo, f[2]->comp12Split_.lo, f[3]->comp12Split_.lo);
+                if (compAny)
+                {
+                    for (int k = 0; k < 4; ++k)
+                    {
+                        if (compCur[k] != compTgt[k])
+                        {
+                            const std::int32_t diff = compTgt[k] - compCur[k];
+                            std::int32_t step = mulSplit15 (diff, f[k]->qAlpha_.hi, f[k]->qAlpha_.lo);
+                            if (step == 0)
+                                step = diff > 0 ? 1 : -1;
+                            compCur[k] = std::clamp (compCur[k] + step, 0, kQ23One);
+                        }
+                    }
+                    compHi = Int32x4::make (compCur[0] >> 16, compCur[1] >> 16, compCur[2] >> 16, compCur[3] >> 16);
+                    compLo = Int32x4::make ((compCur[0] >> 9) & 0x7f, (compCur[1] >> 9) & 0x7f, (compCur[2] >> 9) & 0x7f, (compCur[3] >> 9) & 0x7f);
+                }
                 out = sat24x4 (mulSplit15x4 (y, compHi, compLo));
             }
             else
@@ -322,17 +430,30 @@ private:
                 if (prevQ[k] == qCur[k])
                     f[k]->qMoving_ = false;
             }
+            if constexpr (! Steep)
+            {
+                if (compAny && f[k]->compMoving_)
+                {
+                    f[k]->comp12_ = compCur[k];
+                    f[k]->comp12Split_ = splitCoeff15 (compCur[k]);
+                    f[k]->compMoving_ = compCur[k] != compTgt[k];
+                }
+            }
         }
     }
 
     std::array<Q23, 2> low_ {}, band_ {};
     Q23 stage1Prev_ { 0 };
+    Q23 oldLow1_ { 0 }, oldBand1_ { 0 }, oldStage1Prev_ { 0 };
     Coeff15 fc_ { splitCoeff15 (327680) }, qc_ { splitCoeff15 (kQ23One >> 1) };
     Coeff15 fAlpha_ { splitCoeff15 (1 << 14) }, qAlpha_ { splitCoeff15 (1 << 14) }, comp12Split_ { splitCoeff15 (kQ23Max) };
     Q23 f_ { 327680 }, fTarget_ { 327680 };
     Q23 qHalf_ { kQ23One >> 1 }, qHalfTarget_ { kQ23One >> 1 };
-    FilterType type_ { FilterType::LowPass };
-    bool steep_ { true }, fMoving_ { false }, qMoving_ { false }, fresh_ { true };
+    Q23 comp12_ { kQ23Max }, comp12Target_ { kQ23Max };
+    FilterType type_ { FilterType::LowPass }, prevType_ { FilterType::LowPass };
+    int modeFade_ { 0 };
+    bool steep_ { true }, prevSteep_ { true };
+    bool fMoving_ { false }, qMoving_ { false }, compMoving_ { false }, fresh_ { true };
 
     std::array<double, 2> lowD_ {}, bandD_ {};
     double fD_ { 5.0 / 128.0 }, fTargetD_ { 5.0 / 128.0 }, fSmoothD_ { 1.0 / 512.0 };

@@ -1635,13 +1635,229 @@ void fixedPointAndMatrix()
     }
 }
 
+void automationGlitch()
+{
+    auto maxSecondDiff = [] (const std::vector<float>& L, const std::vector<float>& R, int start, int end)
+    {
+        double m = 0.0;
+        const int hi = std::min (static_cast<int> (L.size()), end);
+        for (int pos = std::max (2, start); pos < hi; ++pos)
+        {
+            const double d2L = std::abs (static_cast<double> (L[static_cast<std::size_t> (pos)])
+                                         - 2.0 * L[static_cast<std::size_t> (pos - 1)]
+                                         + L[static_cast<std::size_t> (pos - 2)]);
+            const double d2R = std::abs (static_cast<double> (R[static_cast<std::size_t> (pos)])
+                                         - 2.0 * R[static_cast<std::size_t> (pos - 1)]
+                                         + R[static_cast<std::size_t> (pos - 2)]);
+            m = std::max ({ m, d2L, d2R });
+        }
+        return m;
+    };
+
+    Patch smooth;
+    smooth.osc1 = { Wave1::Triangle, 64, 16 };
+    smooth.osc2 = { Wave2::Square, false, 7, 10, 32, 16 };
+    smooth.balance = 0;
+    smooth.xmod = 20;
+    smooth.filter = { FilterType::LowPass, true, 90, 48, 0, 20, 40, { 0, 0, 127, 40 } };
+    smooth.amp = { 0, 0, 127, 40 };
+    smooth.level = 100;
+    smooth.ampLfo = 20;
+    smooth.pan = PanMode::Off;
+    smooth.lfo1 = { LfoWave::Triangle, 50, 0 };
+    smooth.lfo2 = { 60, 10, 10, 10 };
+    smooth.effects = { 0, 0, ChorusType::SuperSlow, 0, DelayType::PanLR, 40, 30, 0 };
+    smooth.pitchLfo = 10;
+    smooth.bendUp = 2;
+    smooth.bendDown = 2;
+
+    constexpr double hostFs = 48000.0;
+    constexpr int pre = 8192;
+    constexpr int total = 24576;
+
+    auto verifyStep = [&] (const std::string& label, Patch startPatch, bool startColor, auto&& evtFn, int revAt = -1, std::function<void (Engine&)> revFn = {})
+    {
+        Engine eRef, eEvt;
+        eRef.prepare (hostFs, 1234u);
+        eEvt.prepare (hostFs, 1234u);
+        eRef.setAnalogColor (startColor);
+        eEvt.setAnalogColor (startColor);
+        eRef.setPatch (Part::Upper, startPatch);
+        eEvt.setPatch (Part::Upper, startPatch);
+        eRef.noteOn (60, 110);
+        eEvt.noteOn (60, 110);
+        eRef.pitchBend (0.5);
+        eEvt.pitchBend (0.5);
+        eRef.modWheel (0.5);
+        eEvt.modWheel (0.5);
+
+        std::vector<float> rL (total), rR (total), eL (total), eR (total);
+        const long allocBefore = allocations;
+        countAllocations = true;
+        for (int pos = 0; pos < total; pos += 64)
+        {
+            if (pos == pre)
+                evtFn (eEvt);
+            if (revAt > 0 && pos == pre + revAt)
+                revFn (eEvt);
+            eRef.render (rL.data() + pos, rR.data() + pos, 64);
+            eEvt.render (eL.data() + pos, eR.data() + pos, 64);
+        }
+        countAllocations = false;
+        check (allocations == allocBefore, label + ": zero allocations on callback");
+
+        bool finite = true;
+        float peak = 0.0f;
+        for (int pos = 0; pos < total; ++pos)
+        {
+            const float vl = eL[static_cast<std::size_t> (pos)];
+            const float vr = eR[static_cast<std::size_t> (pos)];
+            finite = finite && std::isfinite (vl) && std::isfinite (vr);
+            peak = std::max ({ peak, std::abs (vl), std::abs (vr) });
+        }
+        check (finite && peak < 3.5f, label + ": finite bounded output");
+
+        const double preD2 = maxSecondDiff (rL, rR, pre - 2048, pre + 2048);
+        const double transD2 = maxSecondDiff (eL, eR, pre, pre + 2048);
+        const double postD2 = maxSecondDiff (eL, eR, pre + 4096, total);
+        const double baselineD2 = std::max (preD2, postD2);
+        const double limit = std::max (0.015, 2.2 * baselineD2);
+        check (transD2 <= limit,
+               label + ": glitch-free transition D2=" + std::to_string (transD2) + " limit=" + std::to_string (limit));
+
+        int latency = -1;
+        for (int pos = pre; pos < total; ++pos)
+        {
+            if (std::abs (eL[static_cast<std::size_t> (pos)] - rL[static_cast<std::size_t> (pos)]) > 1e-7f
+                || std::abs (eR[static_cast<std::size_t> (pos)] - rR[static_cast<std::size_t> (pos)]) > 1e-7f)
+            {
+                latency = pos - pre;
+                break;
+            }
+        }
+        return latency;
+    };
+
+    // 1. All 56 non-mono canonical controls (both min->max and max->min).
+    for (int ctrl = 0; ctrl < kControlCount; ++ctrl)
+    {
+        if (ctrl == kMono)
+            continue;
+        Patch startMin = smooth;
+        if (ctrl == kChorusType || ctrl == kChorusLevel)
+            startMin.effects.chorus = 80;
+        if (ctrl == kDelayType || ctrl == kDelayTime || ctrl == kDelayFeedback || ctrl == kDelayLevel)
+            startMin.effects.delay = 80;
+        if (ctrl == kResonance)
+        {
+            startMin.filter.steep = false;
+            startMin.filter.cutoff = 85;
+        }
+        applyControl (startMin, ctrl, kControls[static_cast<std::size_t> (ctrl)].min);
+        Patch startMax = startMin;
+        applyControl (startMax, ctrl, kControls[static_cast<std::size_t> (ctrl)].max);
+
+        const std::string id (kControls[static_cast<std::size_t> (ctrl)].id);
+        const int latUp = verifyStep (id + " min->max", startMin, true, [&] (Engine& e) { e.setPatch (Part::Upper, startMax); });
+        verifyStep (id + " max->min", startMax, true, [&] (Engine& e) { e.setPatch (Part::Upper, startMin); });
+
+        if (ctrl == kCutoff || ctrl == kTreble || ctrl == kLevel || ctrl == kOsc1Wave
+            || ctrl == kFilterType || ctrl == kFilterSlope)
+        {
+            check (latUp >= 0 && latUp < 96, id + ": immediate pickup latency=" + std::to_string (latUp));
+        }
+    }
+
+    // 2. Performance controls & DAC color with immediate pickup latency.
+    const int latColorOff = verifyStep ("analog_color off", smooth, true, [] (Engine& e) { e.setAnalogColor (false); });
+    const int latColorOn = verifyStep ("analog_color on", smooth, false, [] (Engine& e) { e.setAnalogColor (true); });
+    const int latBend = verifyStep ("pitchBend", smooth, true, [] (Engine& e) { e.pitchBend (-1.0); });
+    const int latMod = verifyStep ("modWheel", smooth, true, [] (Engine& e) { e.modWheel (0.0); });
+    const int latTune = verifyStep ("setTune", smooth, true, [] (Engine& e) { e.setTune (100.0); });
+    check (latColorOff >= 0 && latColorOff < 96, "analog_color off immediate pickup");
+    check (latColorOn >= 0 && latColorOn < 96, "analog_color on immediate pickup");
+    check (latBend >= 0 && latBend < 96, "pitchBend immediate pickup");
+    check (latMod >= 0 && latMod < 96, "modWheel immediate pickup");
+    check (latTune >= 0 && latTune < 96, "setTune immediate pickup");
+
+    // 3. Fast mid-crossfade reversals.
+    verifyStep ("filter_slope rev", smooth, true,
+                [&] (Engine& e) { Patch alt = smooth; alt.filter.steep = false; e.setPatch (Part::Upper, alt); },
+                64, [&] (Engine& e) { e.setPatch (Part::Upper, smooth); });
+    verifyStep ("filter_type rev", smooth, true,
+                [&] (Engine& e) { Patch alt = smooth; alt.filter.type = FilterType::HighPass; e.setPatch (Part::Upper, alt); },
+                64, [&] (Engine& e) { e.setPatch (Part::Upper, smooth); });
+    verifyStep ("osc1_wave rev", smooth, true,
+                [&] (Engine& e) { Patch alt = smooth; alt.osc1.wave = Wave1::Square; e.setPatch (Part::Upper, alt); },
+                64, [&] (Engine& e) { e.setPatch (Part::Upper, smooth); });
+    verifyStep ("chorus_type rev", smooth, true,
+                [&] (Engine& e) { Patch alt = smooth; alt.effects.chorus = 80; alt.effects.chorusType = ChorusType::FlangerFast; e.setPatch (Part::Upper, alt); },
+                64, [&] (Engine& e) { Patch alt = smooth; alt.effects.chorus = 80; alt.effects.chorusType = ChorusType::SuperSlow; e.setPatch (Part::Upper, alt); });
+    verifyStep ("analog_color rev", smooth, true,
+                [] (Engine& e) { e.setAnalogColor (false); },
+                64, [] (Engine& e) { e.setAnalogColor (true); });
+
+    // 4. Block-size independence (1 vs 64 vs 997) across simultaneous automation transitions.
+    auto renderWithChunk = [&] (int chunkSize)
+    {
+        constexpr int len = 12000;
+        Engine e;
+        e.prepare (hostFs, 4242u);
+        e.setAnalogColor (true);
+        Patch p0 = smooth;
+        p0.effects.chorus = 60;
+        p0.effects.delay = 40;
+        e.setPatch (Part::Upper, p0);
+        e.noteOn (60, 100);
+        std::vector<float> outL (len), outR (len);
+        bool switched1 = false, switched2 = false;
+        int pos = 0;
+        while (pos < len)
+        {
+            if (! switched1 && pos >= 2000)
+            {
+                switched1 = true;
+                Patch p1 = p0;
+                p1.osc1.wave = Wave1::SuperSaw;
+                p1.osc1.ctrl1 = 70;
+                p1.filter.type = FilterType::BandPass;
+                p1.filter.steep = false;
+                p1.filter.resonance = 70;
+                p1.effects.treble = 40;
+                p1.effects.chorusType = ChorusType::JetPhasing;
+                e.setPatch (Part::Upper, p1);
+                e.setAnalogColor (false);
+                e.pitchBend (0.5);
+                e.modWheel (0.6);
+                e.setTune (-30.0);
+            }
+            if (! switched2 && pos >= 6000)
+            {
+                switched2 = true;
+                e.setPatch (Part::Upper, p0);
+                e.setAnalogColor (true);
+            }
+            int nextEvent = ! switched1 ? 2000 : (! switched2 ? 6000 : len);
+            int step = std::min ({ chunkSize, nextEvent - pos, len - pos });
+            e.render (outL.data() + pos, outR.data() + pos, step);
+            pos += step;
+        }
+        return std::pair<std::vector<float>, std::vector<float>> { std::move (outL), std::move (outR) };
+    };
+    const auto [l1, r1] = renderWithChunk (1);
+    const auto [l64, r64] = renderWithChunk (64);
+    const auto [l997, r997] = renderWithChunk (997);
+    check (l1 == l64 && r1 == r64 && l1 == l997 && r1 == r997,
+           "automation transitions are bit-identical across block sizes 1, 64, and 997");
+}
+
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
         { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy }, { "AnalogColor", analogColor },
-        { "FixedPointAndMatrix", fixedPointAndMatrix } };
+        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

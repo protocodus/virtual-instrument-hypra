@@ -246,6 +246,18 @@ inline constexpr Q23 wrap24 (std::int32_t x) noexcept
     return static_cast<Q23> (static_cast<std::int32_t> (u) >> 8);
 }
 
+// Symmetric one-pole step toward target that never stalls on small positive deltas.
+inline constexpr Q23 smoothStepQ23 (Q23 cur, Q23 target, int shift) noexcept
+{
+    const std::int32_t diff = target - cur;
+    if (diff == 0)
+        return cur;
+    const std::int32_t step = diff >> shift;
+    if (step != 0)
+        return sat24 (cur + step);
+    return sat24 (cur + (diff > 0 ? 1 : -1));
+}
+
 inline Q23 toQ23 (double x) noexcept
 {
     return sat24 (static_cast<std::int64_t> (std::floor (std::clamp (x, -2.0, 2.0) * static_cast<double> (kQ23One))));

@@ -17,6 +17,21 @@ public:
     {
         xB1_ = yB1_ = xT1_ = yT1_ = 0.0;
         xB1Q_ = yB1Q_ = yBoutPrevQ_ = xT1Q_ = yT1Q_ = 0;
+        snap();
+        fresh_ = true;
+    }
+
+    void snap() noexcept
+    {
+        negBB_ = negBBTarget_;
+        aBQ23_ = aBTarget_;
+        negBT_ = negBTTarget_;
+        aTQ23_ = aTTarget_;
+        gCutQ23_ = gCutTarget_;
+        gBoostQ23_ = gBoostTarget_;
+        updateSplits();
+        moving_ = false;
+        fresh_ = false;
     }
 
     void configure (int bass, int treble) noexcept
@@ -30,17 +45,30 @@ public:
         gCut_ = static_cast<double> (mapping::toneTrebleCut[ti]) / 16384.0;
         gBoost_ = static_cast<double> (mapping::toneTrebleBoost[ti]) / 16384.0;
 
-        negBBSplit_ = splitTable15 (-static_cast<std::int32_t> (mapping::toneBassB[bi]));
-        aBSplit_ = splitTable15 (mapping::toneBassA[bi]);
-        negBTSplit_ = splitTable15 (-static_cast<std::int32_t> (mapping::toneTrebleB[ti]));
-        aTSplit_ = splitTable15 (mapping::toneTrebleA[ti]);
-        gCutSplit_ = splitTable15 (mapping::toneTrebleCut[ti]);
-        gBoostSplit_ = splitTable15 (mapping::toneTrebleBoost[ti]);
+        negBBTarget_ = -static_cast<std::int32_t> (mapping::toneBassB[bi]) * 256;
+        aBTarget_ = static_cast<std::int32_t> (mapping::toneBassA[bi]) * 256;
+        negBTTarget_ = -static_cast<std::int32_t> (mapping::toneTrebleB[ti]) * 256;
+        aTTarget_ = static_cast<std::int32_t> (mapping::toneTrebleA[ti]) * 256;
+        gCutTarget_ = static_cast<std::int32_t> (mapping::toneTrebleCut[ti]) * 256;
+        gBoostTarget_ = static_cast<std::int32_t> (mapping::toneTrebleBoost[ti]) * 256;
+
+        if (fresh_)
+        {
+            snap();
+        }
+        else
+        {
+            moving_ = negBB_ != negBBTarget_ || aBQ23_ != aBTarget_
+                      || negBT_ != negBTTarget_ || aTQ23_ != aTTarget_
+                      || gCutQ23_ != gCutTarget_ || gBoostQ23_ != gBoostTarget_;
+        }
     }
 
     // Internal hardware gain staging with rail clipping and -12 dB flat headroom.
     Q23 processSaturatingQ23 (Q23 x) noexcept
     {
+        if (moving_)
+            stepCoeffs();
         // Treble stage runs on the previous sample's cut-scaled bass output before bass updates its latch.
         const Q23 yT = sat24 (yBoutPrevQ_ + mulSplit15 (xT1Q_, negBTSplit_.hi, negBTSplit_.lo)
                                           + mulSplit15 (yT1Q_, aTSplit_.hi, aTSplit_.lo));
@@ -58,6 +86,14 @@ public:
 
     void processBlockSaturatingQ23 (Q23* buf, int n) noexcept
     {
+        int i = 0;
+        while (i < n && moving_)
+        {
+            buf[i] = processSaturatingQ23 (buf[i]);
+            ++i;
+        }
+        if (i >= n)
+            return;
         Q23 xB1 = xB1Q_, yB1 = yB1Q_, yBoutPrev = yBoutPrevQ_, xT1 = xT1Q_, yT1 = yT1Q_;
         const std::int32_t nbHi = negBBSplit_.hi, nbLo = negBBSplit_.lo;
         const std::int32_t abHi = aBSplit_.hi, abLo = aBSplit_.lo;
@@ -66,7 +102,7 @@ public:
         const std::int32_t gcHi = gCutSplit_.hi, gcLo = gCutSplit_.lo;
         const std::int32_t gbHi = gBoostSplit_.hi, gbLo = gBoostSplit_.lo;
 
-        for (int i = 0; i < n; ++i)
+        for (; i < n; ++i)
         {
             const Q23 x = buf[i];
             const Q23 yT = sat24 (yBoutPrev + mulSplit15 (xT1, ntHi, ntLo) + mulSplit15 (yT1, atHi, atLo));
@@ -106,15 +142,46 @@ public:
     }
 
 private:
+    void updateSplits() noexcept
+    {
+        negBBSplit_ = splitCoeff15 (negBB_);
+        aBSplit_ = splitCoeff15 (aBQ23_);
+        negBTSplit_ = splitCoeff15 (negBT_);
+        aTSplit_ = splitCoeff15 (aTQ23_);
+        gCutSplit_ = splitCoeff15 (gCutQ23_);
+        gBoostSplit_ = splitCoeff15 (gBoostQ23_);
+    }
+
+    void stepCoeffs() noexcept
+    {
+        negBB_ = smoothStepQ23 (negBB_, negBBTarget_, 7);
+        aBQ23_ = smoothStepQ23 (aBQ23_, aBTarget_, 7);
+        negBT_ = smoothStepQ23 (negBT_, negBTTarget_, 7);
+        aTQ23_ = smoothStepQ23 (aTQ23_, aTTarget_, 7);
+        gCutQ23_ = smoothStepQ23 (gCutQ23_, gCutTarget_, 7);
+        gBoostQ23_ = smoothStepQ23 (gBoostQ23_, gBoostTarget_, 7);
+        updateSplits();
+        moving_ = negBB_ != negBBTarget_ || aBQ23_ != aBTarget_
+                  || negBT_ != negBTTarget_ || aTQ23_ != aTTarget_
+                  || gCutQ23_ != gCutTarget_ || gBoostQ23_ != gBoostTarget_;
+    }
+
     double bB_ { 31743.0 / 32768.0 }, aB_ { 31743.0 / 32768.0 };
     double bT_ { 30589.0 / 32768.0 }, aT_ { 30589.0 / 32768.0 };
     double gCut_ { 1.0 }, gBoost_ { 0.25 };
     double xB1_ { 0.0 }, yB1_ { 0.0 }, xT1_ { 0.0 }, yT1_ { 0.0 };
 
+    Q23 negBB_ { -31743 * 256 }, negBBTarget_ { -31743 * 256 };
+    Q23 aBQ23_ { 31743 * 256 }, aBTarget_ { 31743 * 256 };
+    Q23 negBT_ { -30589 * 256 }, negBTTarget_ { -30589 * 256 };
+    Q23 aTQ23_ { 30589 * 256 }, aTTarget_ { 30589 * 256 };
+    Q23 gCutQ23_ { 16384 * 256 }, gCutTarget_ { 16384 * 256 };
+    Q23 gBoostQ23_ { 4096 * 256 }, gBoostTarget_ { 4096 * 256 };
     Coeff15 negBBSplit_ { splitTable15 (-31743) }, aBSplit_ { splitTable15 (31743) };
     Coeff15 negBTSplit_ { splitTable15 (-30589) }, aTSplit_ { splitTable15 (30589) };
     Coeff15 gCutSplit_ { splitTable15 (16384) }, gBoostSplit_ { splitTable15 (4096) };
     Q23 xB1Q_ { 0 }, yB1Q_ { 0 }, yBoutPrevQ_ { 0 }, xT1Q_ { 0 }, yT1Q_ { 0 };
+    bool moving_ { false }, fresh_ { true };
 };
 
 class Delay
@@ -146,17 +213,33 @@ public:
         switch (type)
         {
             case DelayType::PanLR:
+                lpfK8_ = 103;
+                gL1Target_ = 0; gL2Target_ = kQ23Max;
+                gR1Target_ = kQ23Max; gR2Target_ = 0;
+                break;
             case DelayType::PanRL:
                 lpfK8_ = 103;
+                gL1Target_ = kQ23Max; gL2Target_ = 0;
+                gR1Target_ = 0; gR2Target_ = kQ23Max;
                 break;
             case DelayType::PanShort:
+                lpfK8_ = 107;
+                gL1Target_ = kQ23Max; gL2Target_ = 0;
+                gR1Target_ = 0; gR2Target_ = kQ23Max;
+                break;
             case DelayType::MonoShort:
                 lpfK8_ = 107;
+                gL1Target_ = kQ23Max; gL2Target_ = 0;
+                gR1Target_ = kQ23Max; gR2Target_ = 0;
                 break;
             case DelayType::MonoLong:
                 lpfK8_ = 96;
+                gL1Target_ = kQ23Max; gL2Target_ = 0;
+                gR1Target_ = kQ23Max; gR2Target_ = 0;
                 break;
         }
+        routeMoving_ = gL1_ != gL1Target_ || gL2_ != gL2Target_
+                       || gR1_ != gR1Target_ || gR2_ != gR2Target_;
         lpfOneMinusK8_ = 128 - lpfK8_;
     }
 
@@ -167,35 +250,29 @@ public:
         lvl_ = lvlTarget_;
         fbSplit_ = splitCoeff15 (fb_);
         lvlSplit_ = splitCoeff15 (lvl_);
-        fbMoving_ = lvlMoving_ = false;
+        gL1_ = gL1Target_; gL2_ = gL2Target_;
+        gR1_ = gR1Target_; gR2_ = gR2Target_;
+        updateRouteSplits();
+        fbMoving_ = lvlMoving_ = routeMoving_ = false;
     }
 
     StereoQ23 processQ23 (Q23 x) noexcept
     {
-        const std::int64_t dDiff = d1TargetQ16_ - d1Q16_;
-        d1Q16_ = abs64 (dDiff) < 4096 ? d1TargetQ16_ : (d1Q16_ + (dDiff >> 12));
+        d1Q16_ = stepDelayPos (d1Q16_, d1TargetQ16_);
         if (fbMoving_)
         {
-            const Q23 nextFb = sat24 (fb_ + ((fbTarget_ - fb_) >> 7));
-            if (nextFb == fb_)
-                fbMoving_ = false;
-            else
-            {
-                fb_ = nextFb;
-                fbSplit_ = splitCoeff15 (fb_);
-            }
+            fb_ = smoothStepQ23 (fb_, fbTarget_, 7);
+            fbSplit_ = splitCoeff15 (fb_);
+            fbMoving_ = fb_ != fbTarget_;
         }
         if (lvlMoving_)
         {
-            const Q23 nextLvl = sat24 (lvl_ + ((lvlTarget_ - lvl_) >> 8));
-            if (nextLvl == lvl_)
-                lvlMoving_ = false;
-            else
-            {
-                lvl_ = nextLvl;
-                lvlSplit_ = splitCoeff15 (lvl_);
-            }
+            lvl_ = smoothStepQ23 (lvl_, lvlTarget_, 8);
+            lvlSplit_ = splitCoeff15 (lvl_);
+            lvlMoving_ = lvl_ != lvlTarget_;
         }
+        if (routeMoving_)
+            stepRouteGains();
 
         const Q23 tap1 = readQ23 (d1Q16_);
         const Q23 tap2 = readQ23 (d1Q16_ >> 1);
@@ -209,6 +286,9 @@ public:
 
         const Q23 w1 = mulSplit15 (tap1, lvlSplit_.hi, lvlSplit_.lo);
         const Q23 w2 = mulSplit15 (tap2, lvlSplit_.hi, lvlSplit_.lo);
+        if (routeMoving_)
+            return { sat24 (mulSplit15 (w1, gL1Split_.hi, gL1Split_.lo) + mulSplit15 (w2, gL2Split_.hi, gL2Split_.lo)),
+                     sat24 (mulSplit15 (w1, gR1Split_.hi, gR1Split_.lo) + mulSplit15 (w2, gR2Split_.hi, gR2Split_.lo)) };
         switch (type_)
         {
             case DelayType::PanLR:
@@ -242,112 +322,77 @@ public:
             }
             return;
         }
+        int i = 0;
+        while (i < n && (d1Q16_ != d1TargetQ16_ || fbMoving_ || lvlMoving_ || routeMoving_))
+        {
+            const StereoQ23 mixed = processMixQ23 (in[i]);
+            outL[i] = mixed.l;
+            outR[i] = mixed.r;
+            ++i;
+        }
+        if (i >= n)
+            return;
+
         std::uint16_t* const bufPtr = buf_.data();
         int write = write_;
-        std::int64_t d1Q16 = d1Q16_;
-        const std::int64_t d1TargetQ16 = d1TargetQ16_;
-        Q23 fb = fb_, lvl = lvl_, lp = lp_, dc = dc_;
-        const Q23 fbTarget = fbTarget_, lvlTarget = lvlTarget_;
-        Coeff15 fbSplit = fbSplit_, lvlSplit = lvlSplit_;
-        bool fbMob = fbMoving_, lvlMob = lvlMoving_;
+        const std::int64_t d1Q16 = d1Q16_;
+        const Coeff15 fbSplit = fbSplit_, lvlSplit = lvlSplit_;
+        Q23 lp = lp_, dc = dc_;
         const std::int32_t lpfK8 = lpfK8_, lpfOmK8 = lpfOneMinusK8_;
-
         const int route = type_ == DelayType::PanLR ? 0
                         : (type_ == DelayType::PanRL || type_ == DelayType::PanShort) ? 1 : 2;
+        const std::int32_t whole1 = static_cast<std::int32_t> (d1Q16 >> 16);
+        const std::int32_t frac1 = static_cast<std::int32_t> (d1Q16 & 0xFFFF);
+        const std::int64_t d2Q16 = d1Q16 >> 1;
+        const std::int32_t whole2 = static_cast<std::int32_t> (d2Q16 >> 16);
+        const std::int32_t frac2 = static_cast<std::int32_t> (d2Q16 & 0xFFFF);
 
-        auto stepDelay = [&] (int idx, Q23 tap1, Q23 tap2, int r) noexcept
+        auto runSettled = [&] (auto routeTag) noexcept
         {
-            const Q23 x = in[idx];
-            const Q23 sIn = sat24 (mul8 (x, 96, 7) + mulSplit15 (tap1, fbSplit.hi, fbSplit.lo));
-            lp = sat24 (mul8 (sIn, lpfOmK8, 7) + mul8 (lp, lpfK8, 7));
-            const Q23 hp = sat24 (mulImmediate15 (lp, 127, 96, 7) + dc);
-            dc = sat24 (dc + mulImmediate15 (hp, -1, 64, 7));
-            bufPtr[static_cast<std::size_t> (write)] = packDelay16 (hp);
-            write = (write + 1) & mask;
+            constexpr int r = decltype (routeTag)::value;
+            for (; i < n; ++i)
+            {
+                const Q23 tap1 = readFixedQ23At (bufPtr, write, whole1, frac1);
+                const Q23 tap2 = readFixedQ23At (bufPtr, write, whole2, frac2);
+                const Q23 x = in[i];
+                const Q23 sIn = sat24 (mul8 (x, 96, 7) + mulSplit15 (tap1, fbSplit.hi, fbSplit.lo));
+                lp = sat24 (mul8 (sIn, lpfOmK8, 7) + mul8 (lp, lpfK8, 7));
+                const Q23 hp = sat24 (mulImmediate15 (lp, 127, 96, 7) + dc);
+                dc = sat24 (dc + mulImmediate15 (hp, -1, 64, 7));
+                bufPtr[static_cast<std::size_t> (write)] = packDelay16 (hp);
+                write = (write + 1) & mask;
 
-            const Q23 w1 = mulSplit15 (tap1, lvlSplit.hi, lvlSplit.lo);
-            const Q23 w2 = mulSplit15 (tap2, lvlSplit.hi, lvlSplit.lo);
-            const Q23 dry = mul8 (x, 112, 7);
-            if (r == 0)
-            {
-                outL[idx] = sat24 (dry + w2);
-                outR[idx] = sat24 (dry + w1);
-            }
-            else if (r == 1)
-            {
-                outL[idx] = sat24 (dry + w1);
-                outR[idx] = sat24 (dry + w2);
-            }
-            else
-            {
-                const Q23 m = sat24 (dry + w1);
-                outL[idx] = m;
-                outR[idx] = m;
+                const Q23 w1 = mulSplit15 (tap1, lvlSplit.hi, lvlSplit.lo);
+                const Q23 w2 = mulSplit15 (tap2, lvlSplit.hi, lvlSplit.lo);
+                const Q23 dry = mul8 (x, 112, 7);
+                if (r == 0)
+                {
+                    outL[i] = sat24 (dry + w2);
+                    outR[i] = sat24 (dry + w1);
+                }
+                else if (r == 1)
+                {
+                    outL[i] = sat24 (dry + w1);
+                    outR[i] = sat24 (dry + w2);
+                }
+                else
+                {
+                    const Q23 m = sat24 (dry + w1);
+                    outL[i] = m;
+                    outR[i] = m;
+                }
             }
         };
+        if (route == 0)
+            runSettled (std::integral_constant<int, 0> {});
+        else if (route == 1)
+            runSettled (std::integral_constant<int, 1> {});
+        else
+            runSettled (std::integral_constant<int, 2> {});
 
-        int i = 0;
-        while (i < n && (d1Q16 != d1TargetQ16 || fbMob || lvlMob))
-        {
-            const std::int64_t dDiff = d1TargetQ16 - d1Q16;
-            d1Q16 = abs64 (dDiff) < 4096 ? d1TargetQ16 : (d1Q16 + (dDiff >> 12));
-            if (fbMob)
-            {
-                const Q23 nextFb = sat24 (fb + ((fbTarget - fb) >> 7));
-                if (nextFb == fb)
-                    fbMob = false;
-                else
-                {
-                    fb = nextFb;
-                    fbSplit = splitCoeff15 (fb);
-                }
-            }
-            if (lvlMob)
-            {
-                const Q23 nextLvl = sat24 (lvl + ((lvlTarget - lvl) >> 8));
-                if (nextLvl == lvl)
-                    lvlMob = false;
-                else
-                {
-                    lvl = nextLvl;
-                    lvlSplit = splitCoeff15 (lvl);
-                }
-            }
-
-            const Q23 tap1 = readQ23At (bufPtr, write, d1Q16);
-            const Q23 tap2 = readQ23At (bufPtr, write, d1Q16 >> 1);
-            stepDelay (i++, tap1, tap2, route);
-        }
-
-        if (i < n)
-        {
-            const std::int32_t whole1 = static_cast<std::int32_t> (d1Q16 >> 16);
-            const std::int32_t frac1 = static_cast<std::int32_t> (d1Q16 & 0xFFFF);
-            const std::int64_t d2Q16 = d1Q16 >> 1;
-            const std::int32_t whole2 = static_cast<std::int32_t> (d2Q16 >> 16);
-            const std::int32_t frac2 = static_cast<std::int32_t> (d2Q16 & 0xFFFF);
-
-            auto runSettled = [&] (auto routeTag) noexcept
-            {
-                constexpr int r = decltype (routeTag)::value;
-                for (; i < n; ++i)
-                {
-                    const Q23 tap1 = readFixedQ23At (bufPtr, write, whole1, frac1);
-                    const Q23 tap2 = readFixedQ23At (bufPtr, write, whole2, frac2);
-                    stepDelay (i, tap1, tap2, r);
-                }
-            };
-            if (route == 0)
-                runSettled (std::integral_constant<int, 0> {});
-            else if (route == 1)
-                runSettled (std::integral_constant<int, 1> {});
-            else
-                runSettled (std::integral_constant<int, 2> {});
-        }
-
-        write_ = write; d1Q16_ = d1Q16; fb_ = fb; lvl_ = lvl;
-        fbSplit_ = fbSplit; lvlSplit_ = lvlSplit; fbMoving_ = fbMob; lvlMoving_ = lvlMob;
-        lp_ = lp; dc_ = dc;
+        write_ = write;
+        lp_ = lp;
+        dc_ = dc;
     }
 
     Stereo process (double x) noexcept
@@ -385,6 +430,41 @@ private:
         return readQ23At (buf_.data(), write_, delayQ16);
     }
 
+    static constexpr std::int64_t stepDelayPos (std::int64_t cur, std::int64_t target) noexcept
+    {
+        const std::int64_t diff = target - cur;
+        if (diff == 0)
+            return cur;
+        constexpr std::int64_t kMaxDelayStepQ16 = 32768; // 0.5 samples/sample max slew
+        std::int64_t step = diff >> 12;
+        if (step == 0)
+            step = diff > 0 ? 1 : -1;
+        else if (step > kMaxDelayStepQ16)
+            step = kMaxDelayStepQ16;
+        else if (step < -kMaxDelayStepQ16)
+            step = -kMaxDelayStepQ16;
+        return cur + step;
+    }
+
+    void updateRouteSplits() noexcept
+    {
+        gL1Split_ = splitCoeff15 (gL1_);
+        gL2Split_ = splitCoeff15 (gL2_);
+        gR1Split_ = splitCoeff15 (gR1_);
+        gR2Split_ = splitCoeff15 (gR2_);
+    }
+
+    void stepRouteGains() noexcept
+    {
+        gL1_ = smoothStepQ23 (gL1_, gL1Target_, 7);
+        gL2_ = smoothStepQ23 (gL2_, gL2Target_, 7);
+        gR1_ = smoothStepQ23 (gR1_, gR1Target_, 7);
+        gR2_ = smoothStepQ23 (gR2_, gR2Target_, 7);
+        updateRouteSplits();
+        routeMoving_ = gL1_ != gL1Target_ || gL2_ != gL2Target_
+                       || gR1_ != gR1Target_ || gR2_ != gR2Target_;
+    }
+
     static constexpr int size = 1 << 17, mask = size - 1;
     std::vector<std::uint16_t> buf_;
     int write_ { 0 };
@@ -393,9 +473,13 @@ private:
     Q23 fb_ { 0 }, fbTarget_ { 0 };
     Q23 lvl_ { 0 }, lvlTarget_ { 0 };
     Coeff15 fbSplit_ {}, lvlSplit_ {};
+    Q23 gL1_ { 0 }, gL1Target_ { 0 }, gL2_ { kQ23Max }, gL2Target_ { kQ23Max };
+    Q23 gR1_ { kQ23Max }, gR1Target_ { kQ23Max }, gR2_ { 0 }, gR2Target_ { 0 };
+    Coeff15 gL1Split_ {}, gL2Split_ { splitCoeff15 (kQ23Max) };
+    Coeff15 gR1Split_ { splitCoeff15 (kQ23Max) }, gR2Split_ {};
     std::int32_t lpfK8_ { 103 }, lpfOneMinusK8_ { 25 };
     Q23 lp_ { 0 }, dc_ { 0 };
-    bool fbMoving_ { false }, lvlMoving_ { false };
+    bool fbMoving_ { false }, lvlMoving_ { false }, routeMoving_ { false };
 };
 
 // Unified stereo dual-tap Multi-FX engine across all twelve chorus, flanger, and phaser presets.
@@ -408,43 +492,93 @@ public:
         write_ = 0;
         phase_ = 0;
         lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
+        pendingType_ = type_;
+        typeFade_ = 256;
+        fadeState_ = FadeState::Idle;
         snap();
+        fresh_ = true;
     }
 
     void configure (ChorusType type, int level) noexcept
     {
-        if (type != type_)
-        {
-            type_ = type;
-            phase_ = 0;
-            lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
-        }
         lvlTarget_ = mapping::levelCurveQ23 (level);
         lvlMoving_ = lvl_ != lvlTarget_;
+        if (fresh_)
+        {
+            type_ = pendingType_ = type;
+            phase_ = 0;
+            lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
+            typeFade_ = 256;
+            fadeState_ = FadeState::Idle;
+            fresh_ = false;
+        }
+        else if (type != pendingType_ || (fadeState_ == FadeState::Idle && type != type_))
+        {
+            if (lvl_ == 0 && lvlTarget_ == 0 && wetL_ == 0 && wetR_ == 0)
+            {
+                type_ = pendingType_ = type;
+                phase_ = 0;
+                lpIn_ = fbLp_ = dc_ = 0;
+                typeFade_ = 256;
+                fadeState_ = FadeState::Idle;
+            }
+            else if (fadeState_ == FadeState::FadeOut && type == type_)
+            {
+                pendingType_ = type;
+                fadeState_ = FadeState::FadeIn;
+            }
+            else
+            {
+                pendingType_ = type;
+                fadeState_ = FadeState::FadeOut;
+            }
+        }
     }
 
     void snap() noexcept
     {
+        type_ = pendingType_;
+        typeFade_ = 256;
+        fadeState_ = FadeState::Idle;
         lvl_ = lvlTarget_;
         lvlSplit_ = splitCoeff15 (lvl_);
         lvlMoving_ = false;
+        fresh_ = false;
     }
 
     StereoQ23 processMixQ23 (StereoQ23 dry) noexcept
     {
-        const PresetQ23& p = preset (type_);
         if (lvlMoving_)
         {
-            const Q23 nextLvl = sat24 (lvl_ + ((lvlTarget_ - lvl_) >> 7));
-            if (nextLvl == lvl_)
-                lvlMoving_ = false;
-            else
+            lvl_ = smoothStepQ23 (lvl_, lvlTarget_, 7);
+            lvlSplit_ = splitCoeff15 (lvl_);
+            lvlMoving_ = lvl_ != lvlTarget_;
+        }
+        if (fadeState_ == FadeState::FadeOut)
+        {
+            if (typeFade_ > 0)
+                --typeFade_;
+            if (typeFade_ <= 0)
             {
-                lvl_ = nextLvl;
-                lvlSplit_ = splitCoeff15 (lvl_);
+                type_ = pendingType_;
+                phase_ = 0;
+                lpIn_ = fbLp_ = dc_ = wetL_ = wetR_ = 0;
+                typeFade_ = 0;
+                fadeState_ = FadeState::FadeIn;
+            }
+        }
+        else if (fadeState_ == FadeState::FadeIn)
+        {
+            if (typeFade_ < 256)
+                ++typeFade_;
+            if (typeFade_ >= 256)
+            {
+                typeFade_ = 256;
+                fadeState_ = FadeState::Idle;
             }
         }
 
+        const PresetQ23& p = preset (type_);
         phase_ = wrap24 (phase_ + p.phaseStep);
         const std::int32_t absP = std::abs (phase_);
         const std::int32_t invP = kQ23One - absP;
@@ -477,8 +611,14 @@ public:
         wetR_ = sat24 (mulSplit15 (combR, p.oneMinusOutFlt.hi, p.oneMinusOutFlt.lo)
                        + mulSplit15 (wetR_, p.outFlt.hi, p.outFlt.lo));
 
-        return { sat24 (mul8 (dry.l, 116, 7) + mul8 (wetL_, 116, 7)),
-                 sat24 (mul8 (dry.r, 116, 7) + mul8 (wetR_, 116, 7)) };
+        const Q23 wL = fadeState_ == FadeState::Idle
+                           ? wetL_
+                           : static_cast<Q23> ((static_cast<std::int64_t> (wetL_) * typeFade_) >> 8);
+        const Q23 wR = fadeState_ == FadeState::Idle
+                           ? wetR_
+                           : static_cast<Q23> ((static_cast<std::int64_t> (wetR_) * typeFade_) >> 8);
+        return { sat24 (mul8 (dry.l, 116, 7) + mul8 (wL, 116, 7)),
+                 sat24 (mul8 (dry.r, 116, 7) + mul8 (wR, 116, 7)) };
     }
 
     void advanceIdlePhase (int n) noexcept
@@ -490,15 +630,24 @@ public:
 
     void processBlockMixQ23 (Q23* bufL, Q23* bufR, int n) noexcept
     {
+        int i = 0;
+        while (i < n && (lvlMoving_ || fadeState_ != FadeState::Idle))
+        {
+            const StereoQ23 mixed = processMixQ23 ({ bufL[i], bufR[i] });
+            bufL[i] = mixed.l;
+            bufR[i] = mixed.r;
+            ++i;
+        }
+        if (i >= n)
+            return;
+
         const PresetQ23& p = preset (type_);
         int write = write_;
-        Q23 lvl = lvl_, phase = phase_, lpIn = lpIn_, fbLp = fbLp_, dc = dc_, wetL = wetL_, wetR = wetR_;
-        Coeff15 lvlSplit = lvlSplit_;
-        bool lvlMob = lvlMoving_;
-        const Q23 lvlTarget = lvlTarget_;
+        Q23 phase = phase_, lpIn = lpIn_, fbLp = fbLp_, dc = dc_, wetL = wetL_, wetR = wetR_;
+        const Coeff15 lvlSplit = lvlSplit_;
         std::uint16_t* const bufPtr = buf_.data();
 
-        auto stepChorusSample = [&] (int idx) noexcept
+        for (; i < n; ++i)
         {
             phase = wrap24 (phase + p.phaseStep);
             const std::int32_t absP = phase < 0 ? -phase : phase;
@@ -509,7 +658,7 @@ public:
             const Q23 tapLRaw = readQ23At (bufPtr, write, dLQ16);
             const Q23 tapRRaw = readQ23At (bufPtr, write, dRQ16);
 
-            const Q23 dL = bufL[idx], dR = bufR[idx];
+            const Q23 dL = bufL[i], dR = bufR[i];
             const Q23 m = (dL >> 1) + (dR >> 1);
             lpIn = sat24 (mulSplit15 (m, p.oneMinusInFlt.hi, p.oneMinusInFlt.lo)
                           + mulSplit15 (lpIn, p.inFlt.hi, p.inFlt.lo));
@@ -533,29 +682,12 @@ public:
             wetR = sat24 (mulSplit15 (combR, p.oneMinusOutFlt.hi, p.oneMinusOutFlt.lo)
                           + mulSplit15 (wetR, p.outFlt.hi, p.outFlt.lo));
 
-            bufL[idx] = sat24 (mul8 (dL, 116, 7) + mul8 (wetL, 116, 7));
-            bufR[idx] = sat24 (mul8 (dR, 116, 7) + mul8 (wetR, 116, 7));
-        };
-
-        int i = 0;
-        while (i < n && lvlMob)
-        {
-            const Q23 nextLvl = sat24 (lvl + ((lvlTarget - lvl) >> 7));
-            if (nextLvl == lvl)
-            {
-                lvlMob = false;
-                break;
-            }
-            lvl = nextLvl;
-            lvlSplit = splitCoeff15 (lvl);
-            stepChorusSample (i++);
+            bufL[i] = sat24 (mul8 (dL, 116, 7) + mul8 (wetL, 116, 7));
+            bufR[i] = sat24 (mul8 (dR, 116, 7) + mul8 (wetR, 116, 7));
         }
-        for (; i < n; ++i)
-            stepChorusSample (i);
 
-        write_ = write; lvl_ = lvl; phase_ = phase;
+        write_ = write; phase_ = phase;
         lpIn_ = lpIn; fbLp_ = fbLp; dc_ = dc; wetL_ = wetL; wetR_ = wetR;
-        lvlSplit_ = lvlSplit; lvlMoving_ = lvlMob;
     }
 
     Stereo process (double monoDry) noexcept { return processMix ({ monoDry, monoDry }); }
@@ -625,13 +757,17 @@ private:
         return readQ23At (buf_.data(), write_, delayQ16);
     }
 
+    enum class FadeState : std::uint8_t { Idle, FadeOut, FadeIn };
+
     static constexpr int size = 8192, mask = size - 1;
     std::array<std::uint16_t, size> buf_ {};
     int write_ { 0 };
-    ChorusType type_ { ChorusType::SuperSlow };
+    ChorusType type_ { ChorusType::SuperSlow }, pendingType_ { ChorusType::SuperSlow };
+    int typeFade_ { 256 };
+    FadeState fadeState_ { FadeState::Idle };
     Q23 lvl_ { 0 }, lvlTarget_ { 0 }, phase_ { 0 };
     Coeff15 lvlSplit_ {};
     Q23 lpIn_ { 0 }, fbLp_ { 0 }, dc_ { 0 }, wetL_ { 0 }, wetR_ { 0 };
-    bool lvlMoving_ { false };
+    bool lvlMoving_ { false }, fresh_ { true };
 };
 } // namespace trancera

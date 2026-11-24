@@ -37,13 +37,13 @@ public:
     }
     void setVolume (double gain) noexcept { volume_ = std::clamp (gain, 0.0, 2.0); }
     // A host's master tuning, in cents, on every note (held ones too).
-    void setTune (double cents) noexcept { tune_ = std::clamp (cents, -100.0, 100.0) / 100.0; }
+    void setTune (double cents) noexcept;
 
     void noteOn (int note, int velocity) noexcept;
     void noteOff (int note) noexcept;
     void allNotesOff() noexcept;
-    void pitchBend (double value) noexcept { bend_ = std::clamp (value, -1.0, 1.0); }
-    void modWheel (double value) noexcept { mod_ = std::clamp (value, 0.0, 1.0); }
+    void pitchBend (double value) noexcept;
+    void modWheel (double value) noexcept;
     void sustain (bool down) noexcept;
 
     void render (float* left, float* right, int frames) noexcept;
@@ -106,6 +106,7 @@ private:
     void release (Voice& voice) noexcept;
     void control() noexcept;
     void controlVoice (Voice& voice, int part, bool advanceTick) noexcept;
+    void refreshVoices() noexcept;
     void renderChunk (Stereo* out, int n) noexcept;
     void renderTicks (Stereo* out, int count) noexcept;
     void advanceIdleTicks (int ticks) noexcept;

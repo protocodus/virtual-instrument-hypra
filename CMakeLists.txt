@@ -36,7 +36,7 @@ add_executable(TranceraRenderEvents Tools/RenderEvents.cpp)
 target_link_libraries(TranceraRenderEvents PRIVATE TranceraDSP)
 
 enable_testing()
-foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls TriangleShape MultiFxTypes EnvelopeSmoother ToneSaturation Osc2AndSync ControlAccuracy AnalogColor FixedPointAndMatrix)
+foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls TriangleShape MultiFxTypes EnvelopeSmoother ToneSaturation Osc2AndSync ControlAccuracy AnalogColor FixedPointAndMatrix AutomationGlitch)
     add_test(NAME Trancera.${suite} COMMAND TranceraTests ${suite})
     set_tests_properties(Trancera.${suite} PROPERTIES LABELS unit)
 endforeach()

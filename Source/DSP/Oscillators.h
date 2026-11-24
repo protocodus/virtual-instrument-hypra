@@ -313,58 +313,68 @@ public:
             phase = wrap24 (static_cast<std::int32_t> (random.next() >> 8));
         low1_ = band1_ = low2_ = band2_ = 0;
         wrapped_ = false;
-        detuneMoving_ = mixMoving_ = false;
+        detuneMoving_ = mixMoving_ = pitchMoving_ = false;
+        fresh_ = true;
+    }
+
+    void snapNext() noexcept
+    {
+        low1_ = band1_ = low2_ = band2_ = 0;
         fresh_ = true;
     }
 
     void configure (double hz, double detune, double mix) noexcept
     {
         hz_ = std::max (hz, 1.0);
-        centreStep_ = static_cast<std::int32_t> (std::floor (std::clamp (hz_ / kEngineRate, 0.0, 0.499) * 16777216.0));
+        centreStepTarget_ = static_cast<std::int32_t> (std::floor (std::clamp (hz_ / kEngineRate, 0.0, 0.499) * 16777216.0));
         detuneTarget_ = toQ23 (mapping::superDetuneReg (detune));
         mixTarget_ = toQ23 (mapping::superMixSide (mix));
         const double inc = std::clamp (2.0 * hz_ / kEngineRate, 1.0e-5, 0.99);
-        fQ23_ = toQ23 (std::min (0.99, 1.53125 * inc));
-        fSplit_ = splitCoeff15 (fQ23_);
+        fTarget_ = toQ23 (std::min (0.99, 1.53125 * inc));
         if (fresh_)
         {
+            centreStep_ = centreStepTarget_;
+            fQ23_ = fTarget_;
+            fSplit_ = splitCoeff15 (fQ23_);
             detuneCur_ = detuneTarget_;
             mixCur_ = mixTarget_;
             updateMixCache();
-            detuneMoving_ = mixMoving_ = false;
+            updateSteps (detuneCur_);
+            detuneMoving_ = mixMoving_ = pitchMoving_ = false;
             fresh_ = false;
         }
         else
         {
+            pitchMoving_ = centreStep_ != centreStepTarget_ || fQ23_ != fTarget_;
             detuneMoving_ = detuneCur_ != detuneTarget_;
             mixMoving_ = mixCur_ != mixTarget_;
         }
-        updateSteps (detuneCur_);
     }
 
     Q23 processQ23() noexcept
     {
+        bool dirtySteps = false;
+        if (pitchMoving_)
+        {
+            centreStep_ = smoothStepQ23 (centreStep_, centreStepTarget_, 6);
+            fQ23_ = smoothStepQ23 (fQ23_, fTarget_, 6);
+            fSplit_ = splitCoeff15 (fQ23_);
+            dirtySteps = true;
+            pitchMoving_ = centreStep_ != centreStepTarget_ || fQ23_ != fTarget_;
+        }
         if (detuneMoving_)
         {
-            const Q23 nextD = sat24 (detuneCur_ + mul8 (detuneTarget_ - detuneCur_, 112, 7));
-            if (nextD == detuneCur_)
-                detuneMoving_ = false;
-            else
-            {
-                detuneCur_ = nextD;
-                updateSteps (detuneCur_);
-            }
+            detuneCur_ = smoothStepQ23 (detuneCur_, detuneTarget_, 7);
+            dirtySteps = true;
+            detuneMoving_ = detuneCur_ != detuneTarget_;
         }
+        if (dirtySteps)
+            updateSteps (detuneCur_);
         if (mixMoving_)
         {
-            const Q23 nextM = sat24 (mixCur_ + mul8 (mixTarget_ - mixCur_, 112, 7));
-            if (nextM == mixCur_)
-                mixMoving_ = false;
-            else
-            {
-                mixCur_ = nextM;
-                updateMixCache();
-            }
+            mixCur_ = smoothStepQ23 (mixCur_, mixTarget_, 7);
+            updateMixCache();
+            mixMoving_ = mixCur_ != mixTarget_;
         }
 
         const Q23 p0 = wrap24 (phase_[0] + step_[0]); phase_[0] = p0;
@@ -443,7 +453,7 @@ public:
     double process() noexcept { return fromQ23 (processQ23()); }
 
     bool wrapped() const noexcept { return wrapped_; }
-    bool isMoving() const noexcept { return detuneMoving_ || mixMoving_; }
+    bool isMoving() const noexcept { return detuneMoving_ || mixMoving_ || pitchMoving_; }
 
     static void process4BlockQ23 (SuperSaw* const s[4], Q23* const out[4], int n) noexcept
     {
@@ -551,20 +561,23 @@ private:
 
     std::array<Q23, 7> phase_ {}, step_ {};
     double hz_ { 440.0 };
-    std::int32_t centreStep_ { 0 }, mix8_ { 0 };
+    std::int32_t centreStep_ { 0 }, centreStepTarget_ { 0 }, mix8_ { 0 };
     Q23 detuneCur_ { 0 }, detuneTarget_ { 0 };
-    Q23 mixCur_ { 0 }, mixTarget_ { 0 }, fQ23_ { 8192 };
+    Q23 mixCur_ { 0 }, mixTarget_ { 0 }, fQ23_ { 8192 }, fTarget_ { 8192 };
     Coeff15 fSplit_ { splitCoeff15 (8192) }, attenSplit_ { splitCoeff15 (kQ23Max) };
     Q23 low1_ { 0 }, band1_ { 0 }, low2_ { 0 }, band2_ { 0 };
-    bool wrapped_ { false }, detuneMoving_ { false }, mixMoving_ { false }, fresh_ { true };
+    bool wrapped_ { false }, detuneMoving_ { false }, mixMoving_ { false }, pitchMoving_ { false }, fresh_ { true };
 };
 
 class NoiseOsc
 {
 public:
+    void snapNext() noexcept { fresh_ = true; }
+
     void reset() noexcept
     {
         s1_ = s2_ = low1_ = band1_ = low2_ = band2_ = 0;
+        fMoving_ = qMoving_ = false;
         fresh_ = true;
     }
 
@@ -602,25 +615,15 @@ public:
     {
         if (fMoving_)
         {
-            const Q23 nextF = sat24 (f_ + ((fTarget_ - f_) >> 11));
-            if (nextF == f_)
-                fMoving_ = false;
-            else
-            {
-                f_ = nextF;
-                fc_ = splitCoeff15 (f_);
-            }
+            f_ = smoothStepQ23 (f_, fTarget_, 11);
+            fc_ = splitCoeff15 (f_);
+            fMoving_ = f_ != fTarget_;
         }
         if (qMoving_)
         {
-            const Q23 nextQ = sat24 (qHalf_ + ((qHalfTarget_ - qHalf_) >> 11));
-            if (nextQ == qHalf_)
-                qMoving_ = false;
-            else
-            {
-                qHalf_ = nextQ;
-                qc_ = splitCoeff15 (qHalf_);
-            }
+            qHalf_ = smoothStepQ23 (qHalf_, qHalfTarget_, 11);
+            qc_ = splitCoeff15 (qHalf_);
+            qMoving_ = qHalf_ != qHalfTarget_;
         }
 
         // 24-bit wrapping chaotic noise recurrence producing [-0.5, +0.5].
@@ -694,9 +697,16 @@ public:
 
     Q23 processQ23 (Q23 rawSawPhase) noexcept
     {
-        d1Q16_ += (d1TargetQ16_ - d1Q16_) >> 7;
-        h_ = sat24 (h_ + ((hTarget_ - h_) >> 11));
-        amt_ = sat24 (amt_ + ((amtTarget_ - amt_) >> 11));
+        const std::int32_t dDiff = d1TargetQ16_ - d1Q16_;
+        if (dDiff != 0)
+        {
+            std::int32_t step = dDiff >> 7;
+            if (step == 0)
+                step = dDiff > 0 ? 1 : -1;
+            d1Q16_ += step;
+        }
+        h_ = smoothStepQ23 (h_, hTarget_, 11);
+        amt_ = smoothStepQ23 (amt_, amtTarget_, 11);
 
         const std::int64_t hScale = (static_cast<std::int64_t> (kQ23One) >> 1) + h_;
         const std::int32_t d2Q16 = static_cast<std::int32_t> (std::max<std::int64_t> (65536, (static_cast<std::int64_t> (d1Q16_) * hScale) >> 23));
@@ -765,7 +775,8 @@ public:
             dc_ = 0;
             noise_.reset (random);
             feedback_.reset();
-            shapeMoving_ = pw2Moving_ = balMoving_ = false;
+            shapeMoving_ = pw2Moving_ = balMoving_ = pitchMoving_ = fmMoving_ = false;
+            modeFade_ = 0;
             freshSmooth_ = true;
         }
         if (wave == Wave1::FeedbackOsc)
@@ -774,17 +785,56 @@ public:
 
     void configure (const Controls& c) noexcept
     {
-        c_ = c;
-        inc1_ = toQ23 (std::clamp (2.0 * c.hz1 / kEngineRate, -0.998, 0.998));
-        inc2_ = toQ23 (std::clamp (2.0 * c.hz2 / kEngineRate, -0.998, 0.998));
-        osc2SawWin_ = osc::makeSawWindowCoeffs (inc2_, 4);
-        ratioQ16_ = static_cast<std::int64_t> (std::clamp (c.hz2 / std::max (c.hz1, 1.0), 0.0, 2000.0) * 65536.0);
-        if (c.wave1 == Wave1::SuperSaw)
-            super_.configure (c.hz1, c.ctrl1, c.ctrl2);
-        else if (c.wave1 == Wave1::Noise)
-            noise_.configure (c.hz1, c.ctrl1, c.ctrl2);
-        else if (c.wave1 == Wave1::FeedbackOsc)
-            feedback_.configure (c.hz1, c.ctrl1, c.ctrl2);
+        if (freshSmooth_)
+        {
+            c_ = prevC_ = c;
+            modeFade_ = 0;
+        }
+        else if (c.wave1 != c_.wave1 || c.wave2 != c_.wave2 || c.sync != c_.sync || c.ring != c_.ring)
+        {
+            if (modeFade_ > 0 && c.wave1 == prevC_.wave1 && c.wave2 == prevC_.wave2
+                && c.sync == prevC_.sync && c.ring == prevC_.ring)
+            {
+                std::swap (c_, prevC_);
+                modeFade_ = 256 - modeFade_;
+            }
+            else
+            {
+                prevC_ = c_;
+                if (c.wave1 != c_.wave1)
+                {
+                    if (c.wave1 == Wave1::FeedbackOsc)
+                        feedback_.reset();
+                    else if (c.wave1 == Wave1::SuperSaw)
+                        super_.snapNext();
+                    else if (c.wave1 == Wave1::Noise)
+                        noise_.snapNext();
+                }
+                c_ = c;
+                modeFade_ = 256;
+            }
+        }
+        else
+        {
+            c_ = c;
+        }
+
+        inc1Target_ = toQ23 (std::clamp (2.0 * c.hz1 / kEngineRate, -0.998, 0.998));
+        inc2Target_ = toQ23 (std::clamp (2.0 * c.hz2 / kEngineRate, -0.998, 0.998));
+        exactRatioQ16_ = static_cast<std::int64_t> (std::clamp (c.hz2 / std::max (c.hz1, 1.0), 0.0, 2000.0) * 65536.0);
+
+        auto configureWave1 = [&] (Wave1 w) noexcept
+        {
+            if (w == Wave1::SuperSaw)
+                super_.configure (c.hz1, c.ctrl1, c.ctrl2);
+            else if (w == Wave1::Noise)
+                noise_.configure (c.hz1, c.ctrl1, c.ctrl2);
+            else if (w == Wave1::FeedbackOsc)
+                feedback_.configure (c.hz1, c.ctrl1, c.ctrl2);
+        };
+        configureWave1 (c_.wave1);
+        if (modeFade_ > 0 && prevC_.wave1 != c_.wave1)
+            configureWave1 (prevC_.wave1);
 
         const double st = c.wave1 == Wave1::TriangleMod ? mapping::triangleModOffset (c.ctrl1)
                         : c.wave1 == Wave1::Square      ? mapping::pulseWidth (c.ctrl1)
@@ -792,61 +842,160 @@ public:
         shapeTarget_ = toQ23 (st);
         pw2Target_ = toQ23 (mapping::pulseWidth (c.width2));
         balTarget_ = sat24 (toQ23 (std::clamp (c.gain2, 0.0, 1.0)));
+        fmTarget_ = toQ23 (mapping::crossModGain (c.xmod));
         if (freshSmooth_)
         {
+            inc1_ = inc1Target_;
+            inc2_ = inc2Target_;
+            osc2SawWin_ = osc::makeSawWindowCoeffs (inc2_, 4);
+            ratioQ16_ = exactRatioQ16_;
             shape_ = shapeTarget_;
             pw2_ = pw2Target_;
             bal_ = balTarget_;
             balSplit_ = splitCoeff15 (bal_);
             invBalSplit_ = splitCoeff15 (kQ23Max - bal_);
-            shapeMoving_ = pw2Moving_ = balMoving_ = false;
+            fmGain_ = fmTarget_;
+            shapeMoving_ = pw2Moving_ = balMoving_ = pitchMoving_ = fmMoving_ = false;
             freshSmooth_ = false;
         }
         else
         {
+            pitchMoving_ = inc1_ != inc1Target_ || inc2_ != inc2Target_;
+            if (! pitchMoving_)
+                ratioQ16_ = exactRatioQ16_;
             shapeMoving_ = shape_ != shapeTarget_;
             pw2Moving_ = pw2_ != pw2Target_;
             balMoving_ = bal_ != balTarget_;
+            fmMoving_ = fmGain_ != fmTarget_;
         }
 
-        fmGain_ = toQ23 (mapping::crossModGain (c.xmod));
-        fm_ = c.xmod > 0.0 && c.wave1 != Wave1::SuperSaw && c.wave1 != Wave1::Noise;
+        fm_ = (fmGain_ > 0 || fmTarget_ > 0) && c_.wave1 != Wave1::SuperSaw && c_.wave1 != Wave1::Noise;
     }
 
     Q23 processQ23 (Random& random) noexcept
     {
         if (shapeMoving_)
         {
-            const Q23 nextShape = sat24 (shape_ + ((shapeTarget_ - shape_) >> 11));
-            if (nextShape == shape_)
-                shapeMoving_ = false;
-            else
-                shape_ = nextShape;
+            shape_ = smoothStepQ23 (shape_, shapeTarget_, 11);
+            shapeMoving_ = shape_ != shapeTarget_;
         }
         if (pw2Moving_)
         {
-            const Q23 nextPw = sat24 (pw2_ + ((pw2Target_ - pw2_) >> 11));
-            if (nextPw == pw2_)
-                pw2Moving_ = false;
-            else
-                pw2_ = nextPw;
+            pw2_ = smoothStepQ23 (pw2_, pw2Target_, 11);
+            pw2Moving_ = pw2_ != pw2Target_;
         }
         if (balMoving_)
         {
-            const Q23 nextBal = sat24 (bal_ + ((balTarget_ - bal_) >> 6));
-            if (nextBal == bal_)
-                balMoving_ = false;
+            bal_ = smoothStepQ23 (bal_, balTarget_, 8);
+            balSplit_ = splitCoeff15 (bal_);
+            invBalSplit_ = splitCoeff15 (kQ23Max - bal_);
+            balMoving_ = bal_ != balTarget_;
+        }
+        if (fmMoving_)
+        {
+            fmGain_ = smoothStepQ23 (fmGain_, fmTarget_, 8);
+            fmMoving_ = fmGain_ != fmTarget_;
+            if (! fmMoving_)
+                fm_ = fmGain_ > 0 && c_.wave1 != Wave1::SuperSaw && c_.wave1 != Wave1::Noise;
+        }
+        if (pitchMoving_)
+        {
+            inc1_ = smoothStepQ23 (inc1_, inc1Target_, 6);
+            inc2_ = smoothStepQ23 (inc2_, inc2Target_, 6);
+            osc2SawWin_ = osc::makeSawWindowCoeffs (inc2_, 4);
+            pitchMoving_ = inc1_ != inc1Target_ || inc2_ != inc2Target_;
+            if (pitchMoving_)
+            {
+                ratioQ16_ = inc1_ > 0
+                    ? std::clamp<std::int64_t> (
+                          (static_cast<std::int64_t> (std::max<Q23> (0, inc2_)) * 65536LL) / inc1_, 0, 2000LL << 16)
+                    : 65536;
+            }
             else
             {
-                bal_ = nextBal;
-                balSplit_ = splitCoeff15 (bal_);
-                invBalSplit_ = splitCoeff15 (kQ23Max - bal_);
+                ratioQ16_ = exactRatioQ16_;
             }
+        }
+
+        const Q23 inc1Fm = std::clamp<Q23> (inc1_ + mulQ23 (fmGain_, last2_), -8371830, 8371830);
+        if (modeFade_ > 0)
+        {
+            const bool needSuper = c_.wave1 == Wave1::SuperSaw || prevC_.wave1 == Wave1::SuperSaw;
+            const bool needNoise = c_.wave1 == Wave1::Noise || prevC_.wave1 == Wave1::Noise;
+            const bool needFb = c_.wave1 == Wave1::FeedbackOsc || prevC_.wave1 == Wave1::FeedbackOsc;
+            const bool needP1 = c_.wave1 != Wave1::SuperSaw || prevC_.wave1 != Wave1::SuperSaw;
+            const Q23 p1Inc = (fm_ && c_.wave1 != Wave1::SuperSaw && c_.wave1 != Wave1::Noise) ? inc1Fm : inc1_;
+            if (needP1)
+                p1_ = wrap24 (p1_ + p1Inc);
+            const Q23 superVal = needSuper ? super_.processQ23() : 0;
+            const Q23 noiseVal = needNoise ? noise_.processQ23 (random) : 0;
+            const Q23 fbVal = needFb ? feedback_.processQ23 (p1_) : 0;
+            if (! c_.sync || ! prevC_.sync)
+                p2_ = wrap24 (p2_ + inc2_);
+
+            auto evalWave1 = [&] (Wave1 w, Q23 effInc) noexcept -> std::pair<Q23, Q23>
+            {
+                if (w == Wave1::SuperSaw)
+                    return { superVal, super_.centrePhaseQ23() };
+                Q23 f = 0;
+                switch (w)
+                {
+                    case Wave1::TriangleMod: f = osc::triangleModQ23 (p1_, effInc, shape_); break;
+                    case Wave1::Noise:       f = noiseVal; break;
+                    case Wave1::FeedbackOsc: f = fbVal; break;
+                    case Wave1::Square:      f = osc::pulseQ23 (p1_, effInc, shape_); break;
+                    case Wave1::Saw:         f = osc::shapedSawQ23 (p1_, effInc, shape_); break;
+                    case Wave1::Triangle:    f = osc::shapedTriangleQ23 (p1_, shape_); break;
+                    case Wave1::SuperSaw:    break;
+                }
+                return { f, p1_ };
+            };
+            const Q23 effOld = (fmGain_ > 0 && prevC_.wave1 != Wave1::SuperSaw && prevC_.wave1 != Wave1::Noise) ? inc1Fm : inc1_;
+            const Q23 effNew = (fmGain_ > 0 && c_.wave1 != Wave1::SuperSaw && c_.wave1 != Wave1::Noise) ? inc1Fm : inc1_;
+            const auto [firstOld, masterOld] = evalWave1 (prevC_.wave1, effOld);
+            const auto [firstNew, masterNew] = evalWave1 (c_.wave1, effNew);
+
+            auto evalWave2 = [&] (const Controls& cfg, Q23 firstSig, Q23 masterPh, Q23 effInc) noexcept -> std::pair<Q23, Q23>
+            {
+                Q23 sec = 0;
+                if (cfg.sync)
+                {
+                    switch (cfg.wave2)
+                    {
+                        case Wave2::Square:   sec = osc::syncPulseQ23 (masterPh, effInc, inc2_, ratioQ16_, pw2_); break;
+                        case Wave2::Saw:      sec = osc::syncSawQ23 (masterPh, effInc, inc2_, ratioQ16_); break;
+                        case Wave2::Triangle: sec = osc::syncTriangleQ23 (masterPh, effInc, ratioQ16_); break;
+                    }
+                }
+                else
+                {
+                    switch (cfg.wave2)
+                    {
+                        case Wave2::Square:   sec = osc::pulseQ23 (p2_, inc2_, pw2_); break;
+                        case Wave2::Saw:      sec = osc::osc2SawFastQ23 (p2_, osc2SawWin_); break;
+                        case Wave2::Triangle: sec = osc::osc2TriangleQ23 (p2_); break;
+                    }
+                }
+                const Q23 outSec = cfg.ring ? sat24 ((static_cast<std::int64_t> (firstSig) * sec) >> 21) : sec;
+                const Q23 mixed = sat24 (mulSplit15 (firstSig, invBalSplit_.hi, invBalSplit_.lo)
+                                         + mulSplit15 (outSec, balSplit_.hi, balSplit_.lo));
+                return { sec, mixed };
+            };
+            const auto [raw2Old, mixOld] = evalWave2 (prevC_, firstOld, masterOld, effOld);
+            const auto [raw2New, mixNew] = evalWave2 (c_, firstNew, masterNew, effNew);
+            (void) raw2Old;
+            last2_ = c_.wave2 == Wave2::Triangle ? sat24 ((static_cast<std::int64_t> (raw2New) * 8) / 5) : raw2New;
+            const Q23 mix = static_cast<Q23> ((static_cast<std::int64_t> (mixOld) * modeFade_
+                                               + static_cast<std::int64_t> (mixNew) * (256 - modeFade_)) >> 8);
+            --modeFade_;
+            const Q23 y = sat24 (mix + dc_);
+            dc_ = sat24 (dc_ + mulImmediate15 (y, -1, 120, 7));
+            return y;
         }
 
         Q23 first = 0;
         Q23 masterPhase = 0;
-        const Q23 inc1Eff = fm_ ? std::clamp<Q23> (inc1_ + mulQ23 (fmGain_, last2_), -8371830, 8371830) : inc1_;
+        const Q23 inc1Eff = fm_ ? inc1Fm : inc1_;
 
         if (c_.wave1 == Wave1::SuperSaw)
         {
@@ -904,9 +1053,11 @@ public:
     void processBlockQ23 (Q23* out, int n, Random& random) noexcept
     {
         int i = 0;
-        if (shapeMoving_ || pw2Moving_ || balMoving_ || fm_ || c_.sync || c_.ring)
+        if (shapeMoving_ || pw2Moving_ || balMoving_ || pitchMoving_ || fmMoving_
+            || modeFade_ > 0 || fm_ || c_.sync || c_.ring)
         {
-            while (i < n && (shapeMoving_ || pw2Moving_ || balMoving_ || fm_ || c_.sync || c_.ring))
+            while (i < n && (shapeMoving_ || pw2Moving_ || balMoving_ || pitchMoving_ || fmMoving_
+                             || modeFade_ > 0 || fm_ || c_.sync || c_.ring))
                 out[i++] = processQ23 (random);
             if (i >= n)
                 return;
@@ -995,6 +1146,7 @@ public:
             const OscillatorPair* const op = ops[k];
             if (op->c_.wave1 != Wave1::SuperSaw
                 || op->shapeMoving_ || op->pw2Moving_ || op->balMoving_
+                || op->pitchMoving_ || op->fmMoving_ || op->modeFade_ > 0
                 || op->fm_ || op->c_.sync || op->c_.ring || op->super_.isMoving())
                 return false;
         }
@@ -1163,16 +1315,18 @@ private:
     }
 
 private:
-    Controls c_;
-    Q23 p1_ { 0 }, p2_ { 0 }, inc1_ { 0 }, inc2_ { 0 };
+    Controls c_, prevC_;
+    Q23 p1_ { 0 }, p2_ { 0 }, inc1_ { 0 }, inc2_ { 0 }, inc1Target_ { 0 }, inc2Target_ { 0 };
     osc::SawWindowCoeffs osc2SawWin_;
     Q23 bal_ { 0 }, balTarget_ { 0 };
     Coeff15 balSplit_ { splitCoeff15 (0) }, invBalSplit_ { splitCoeff15 (kQ23Max) };
     Q23 shape_ { 0 }, shapeTarget_ { 0 };
     Q23 pw2_ { 0 }, pw2Target_ { 0 };
-    Q23 last2_ { 0 }, fmGain_ { 0 }, dc_ { 0 };
-    std::int64_t ratioQ16_ { 65536 };
-    bool fm_ { false }, shapeMoving_ { false }, pw2Moving_ { false }, balMoving_ { false }, freshSmooth_ { true };
+    Q23 last2_ { 0 }, fmGain_ { 0 }, fmTarget_ { 0 }, dc_ { 0 };
+    std::int64_t ratioQ16_ { 65536 }, exactRatioQ16_ { 65536 };
+    int modeFade_ { 0 };
+    bool fm_ { false }, shapeMoving_ { false }, pw2Moving_ { false }, balMoving_ { false };
+    bool pitchMoving_ { false }, fmMoving_ { false }, freshSmooth_ { true };
     SuperSaw super_;
     NoiseOsc noise_;
     FeedbackOsc feedback_;
