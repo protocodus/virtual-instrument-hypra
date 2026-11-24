@@ -776,6 +776,31 @@ int Engine::activeVoices() const noexcept
     return count;
 }
 
+const Engine::Voice* Engine::latestActiveVoice (int part) const noexcept
+{
+    const Span range = span (part);
+    const Voice* best = nullptr;
+    for (int i = range.first; i < range.first + range.count; ++i)
+    {
+        const Voice& v = voices_[static_cast<std::size_t> (i)];
+        if (v.active && (best == nullptr || v.order > best->order))
+            best = &v;
+    }
+    return best;
+}
+
+double Engine::filterEnvOutput() const noexcept
+{
+    const Voice* v = latestActiveVoice (0);
+    return v != nullptr ? std::clamp (v->filterEnv.value(), 0.0, 1.0) : 0.0;
+}
+
+double Engine::ampEnvOutput() const noexcept
+{
+    const Voice* v = latestActiveVoice (0);
+    return v != nullptr ? std::clamp (v->ampEnv.value(), 0.0, 1.0) : 0.0;
+}
+
 void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
 {
     const PartState& s = parts_[static_cast<std::size_t> (part)];

@@ -4,7 +4,7 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND NOT DEFINED CMAKE_OSX_DEPLOYMENT
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum supported macOS version")
 endif()
 
-project(Trancera VERSION 0.9.5 LANGUAGES CXX)
+project(Trancera VERSION 0.9.6 LANGUAGES CXX)
 
 # Source/DSP is C++17 and JUCE-free: the Rack Extension compiles it directly.
 set(CMAKE_CXX_STANDARD 17)
@@ -40,7 +40,7 @@ target_link_libraries(TranceraSysEx PRIVATE TranceraDSP)
 target_compile_options(TranceraSysEx PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
 
 enable_testing()
-foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls TriangleShape MultiFxTypes EnvelopeSmoother ToneSaturation Osc2AndSync ControlAccuracy AnalogColor FixedPointAndMatrix AutomationGlitch UnisonAndArp Tier1Features DacBypass SysEx)
+foreach(suite SuperSaw HardwareRecording MeasuredLaws Filter Circuit Engine Feedback Effects Stability Timing Modulation ToneControl SustainLaw KeyFollowShift XmodDestination EffectLevels Controls TriangleShape MultiFxTypes EnvelopeSmoother ToneSaturation Osc2AndSync ControlAccuracy AnalogColor FixedPointAndMatrix AutomationGlitch UnisonAndArp Tier1Features DacBypass SysEx ModulationOutputs)
     add_test(NAME Trancera.${suite} COMMAND TranceraTests ${suite})
     set_tests_properties(Trancera.${suite} PROPERTIES LABELS unit)
 endforeach()

@@ -48,6 +48,10 @@ public:
 
     void render (float* left, float* right, int frames) noexcept;
     [[nodiscard]] int activeVoices() const noexcept;
+    [[nodiscard]] double lfo1Output() const noexcept { return parts_[0].lfo1; }
+    [[nodiscard]] double lfo2Output() const noexcept { return parts_[0].lfo2; }
+    [[nodiscard]] double filterEnvOutput() const noexcept;
+    [[nodiscard]] double ampEnvOutput() const noexcept;
 
 private:
     struct Voice
@@ -100,6 +104,7 @@ private:
     static constexpr int kIdleTicksThreshold = 131072 + 8192 + 4096;
 
     [[nodiscard]] Span span (int part) const noexcept;
+    [[nodiscard]] const Voice* latestActiveVoice (int part) const noexcept;
     [[nodiscard]] int partCount() const noexcept { return mode_ == KeyMode::Dual ? 2 : 1; }
     void startPart (int part, int note, int velocity) noexcept;
     void startMono (int part, int note, int velocity, bool retrigger) noexcept;

@@ -221,7 +221,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
           </select>
         </label>
         <label class="field">Device Version
-          <input id="optVersion" type="text" value="0.9.5d1" style="width:76px; font-family:var(--mono)">
+          <input id="optVersion" type="text" value="0.9.6d1" style="width:76px; font-family:var(--mono)">
         </label>
         <label class="field"><input id="optAllParts" type="checkbox"> Include Lower Perf Parts</label>
         <label class="field"><input id="optLenient" type="checkbox"> Ignore Checksum Errors</label>
@@ -1029,7 +1029,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
     $('syxTableWrap').querySelectorAll('[data-dl-rep]').forEach(btn => {
       btn.onclick = () => {
         const rec = list[Number(btn.dataset.dlRep)];
-        const xml = encodeRepatchXml(rec.ctrl, $('optVersion').value.trim() || '0.9.5d1', $('optDac').value === '1');
+        const xml = encodeRepatchXml(rec.ctrl, $('optVersion').value.trim() || '0.9.6d1', $('optDac').value === '1');
         triggerDownload(new Blob([xml], { type: 'application/xml' }), sanitizeFilename(rec.name) + '.repatch');
       };
     });
@@ -1101,7 +1101,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
   $('downloadZipBtn').onclick = () => {
     const list = selectedSyxPatches();
     if (!list.length) return;
-    const ver = $('optVersion').value.trim() || '0.9.5d1';
+    const ver = $('optVersion').value.trim() || '0.9.6d1';
     const dacOn = $('optDac').value === '1';
     const used = new Map();
     const files = list.map(rec => {

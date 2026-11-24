@@ -3292,13 +3292,65 @@ void sysexCodec()
            "panel Velocity & FilterVelocity export into JP VelocityMatrix");
 }
 
+void modulationOutputs()
+{
+    Engine e;
+    e.prepare (48000.0, 2026u);
+    Patch p;
+    p.lfo1 = { LfoWave::Triangle, 95, 0, false, false };
+    p.lfo2 = { 90, 0, 0, 0 };
+    p.filter.env = { 52, 45, 90, 20 };
+    p.amp = { 52, 45, 95, 20 };
+    e.setPatch (Part::Upper, p);
+
+    double l1Min = 1.0, l1Max = -1.0, l2Min = 1.0, l2Max = -1.0;
+    bool envIdleZero = true;
+    std::array<float, 256> l {}, r {};
+    for (int b = 0; b < 80; ++b)
+    {
+        e.render (l.data(), r.data(), 256);
+        const double l1 = e.lfo1Output();
+        const double l2 = e.lfo2Output();
+        l1Min = std::min (l1Min, l1);
+        l1Max = std::max (l1Max, l1);
+        l2Min = std::min (l2Min, l2);
+        l2Max = std::max (l2Max, l2);
+        if (e.filterEnvOutput() != 0.0 || e.ampEnvOutput() != 0.0)
+            envIdleZero = false;
+    }
+    check (l1Min < -0.5 && l1Max > 0.5 && l1Min >= -1.0 && l1Max <= 1.0
+           && l2Min < -0.5 && l2Max > 0.5 && l2Min >= -1.0 && l2Max <= 1.0,
+           "idle LFO 1 and LFO 2 modulation outputs oscillate across [-1, 1]");
+    check (envIdleZero, "envelope modulation outputs remain 0.0 before any note triggers");
+
+    // Overlapping notes track the most recently triggered active voice, then decay back to 0.0.
+    e.noteOn (60, 100);
+    for (int b = 0; b < 50; ++b)
+        e.render (l.data(), r.data(), 256);
+    const double filtBefore = e.filterEnvOutput();
+    const double ampBefore = e.ampEnvOutput();
+    check (filtBefore > 0.25 && filtBefore <= 1.0 && ampBefore > 0.25 && ampBefore <= 1.0,
+           "active note drives filter and amp envelope outputs in (0, 1]");
+
+    e.noteOn (64, 100);
+    e.render (l.data(), r.data(), 256);
+    check (e.filterEnvOutput() < filtBefore && e.ampEnvOutput() < ampBefore,
+           "envelope outputs track newest active voice on overlapping notes");
+
+    e.allNotesOff();
+    for (int b = 0; b < 500; ++b)
+        e.render (l.data(), r.data(), 256);
+    check (e.filterEnvOutput() == 0.0 && e.ampEnvOutput() == 0.0,
+           "envelope modulation outputs return to 0.0 after note release");
+}
+
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
         { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy }, { "AnalogColor", analogColor },
-        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch }, { "UnisonAndArp", unisonAndArp }, { "Tier1Features", tier1Features }, { "DacBypass", dacBypass }, { "SysEx", sysexCodec } };
+        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch }, { "UnisonAndArp", unisonAndArp }, { "Tier1Features", tier1Features }, { "DacBypass", dacBypass }, { "SysEx", sysexCodec }, { "ModulationOutputs", modulationOutputs } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();
