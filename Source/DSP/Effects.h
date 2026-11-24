@@ -173,7 +173,7 @@ public:
     StereoQ23 processQ23 (Q23 x) noexcept
     {
         const std::int64_t dDiff = d1TargetQ16_ - d1Q16_;
-        d1Q16_ = std::abs (dDiff) < 4096 ? d1TargetQ16_ : (d1Q16_ + (dDiff >> 12));
+        d1Q16_ = abs64 (dDiff) < 4096 ? d1TargetQ16_ : (d1Q16_ + (dDiff >> 12));
         if (fbMoving_)
         {
             const Q23 nextFb = sat24 (fb_ + ((fbTarget_ - fb_) >> 7));
@@ -290,7 +290,7 @@ public:
         while (i < n && (d1Q16 != d1TargetQ16 || fbMob || lvlMob))
         {
             const std::int64_t dDiff = d1TargetQ16 - d1Q16;
-            d1Q16 = std::abs (dDiff) < 4096 ? d1TargetQ16 : (d1Q16 + (dDiff >> 12));
+            d1Q16 = abs64 (dDiff) < 4096 ? d1TargetQ16 : (d1Q16 + (dDiff >> 12));
             if (fbMob)
             {
                 const Q23 nextFb = sat24 (fb + ((fbTarget - fb) >> 7));

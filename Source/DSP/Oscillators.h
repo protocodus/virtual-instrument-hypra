@@ -179,7 +179,7 @@ inline Q23 shapedTriangleQ23 (Q23 p, Q23 s) noexcept
     const Q23 u2 = mulQ23 (u, u);
     const Q23 u3 = mulQ23 (u2, u);
     const Q23 w = sat24 (u + mulQ23 (s, u3 - u));
-    const Q23 abs2w = static_cast<Q23> (std::abs (static_cast<std::int64_t> (w) * 2 - kQ23One));
+    const Q23 abs2w = static_cast<Q23> (abs64 (static_cast<std::int64_t> (w) * 2 - kQ23One));
     const Q23 t = sat24 (static_cast<std::int64_t> (abs2w) * 2 - kQ23One);
     const Q23 t3 = mulQ23 (mulQ23 (t, t), t);
     const Q23 y = sat24 (t + ((static_cast<std::int64_t> (s) * (t3 - t)) >> 21));

@@ -28,6 +28,8 @@ inline double fastFloor (double x) noexcept { return std::floor (x); }
 inline double fastSqrt (double x) noexcept { return std::sqrt (x); }
 #endif
 
+inline constexpr std::int64_t abs64 (std::int64_t x) noexcept { return x < 0 ? -x : x; }
+
 inline constexpr double kPi = 3.14159265358979323846;
 inline constexpr double kTwoPi = 2.0 * kPi;
 
