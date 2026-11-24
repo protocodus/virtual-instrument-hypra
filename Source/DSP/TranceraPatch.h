@@ -18,6 +18,17 @@ enum class ChorusType : std::uint8_t
     FlangerFast, DeepPhasing, JetPhasing, Twisting, Freeze1, Freeze2
 };
 enum class DelayType : std::uint8_t { PanLR, PanRL, PanShort, MonoShort, MonoLong };
+enum class ArpMode : std::uint8_t { Up, Down, UpDown, Random, AsPlayed };
+
+struct ArpParams
+{
+    bool on { false };
+    ArpMode mode { ArpMode::Up };
+    int range { 0 };     // 0..3 -> 1..4 octaves
+    int rate { 5 };      // 0..7 -> 1/4, 1/8D, 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32
+    int gate { 75 };     // 10..100 %
+    bool hold { false };
+};
 
 struct Osc1Params
 {
@@ -111,6 +122,7 @@ struct Patch
     // JP-8080 only: the JP-8000 has no unison switch.
     bool unison { false };
     int unisonDetune { 12 }; // cents
+    ArpParams arp;
     VelocityMatrix velocityMatrix;
 };
 

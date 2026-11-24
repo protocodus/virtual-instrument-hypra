@@ -1738,10 +1738,10 @@ void automationGlitch()
         return latency;
     };
 
-    // 1. All 56 non-mono canonical controls (both min->max and max->min).
+    // 1. All non-mono/non-unison canonical controls (both min->max and max->min).
     for (int ctrl = 0; ctrl < kControlCount; ++ctrl)
     {
-        if (ctrl == kMono)
+        if (ctrl == kMono || ctrl == kUnison)
             continue;
         Patch startMin = smooth;
         if (ctrl == kChorusType || ctrl == kChorusLevel)
@@ -1753,7 +1753,13 @@ void automationGlitch()
             startMin.filter.steep = false;
             startMin.filter.cutoff = 85;
         }
+        if (ctrl == kUnisonDetune)
+            startMin.unison = true;
+        if (ctrl == kArpMode || ctrl == kArpRange || ctrl == kArpRate || ctrl == kArpGate || ctrl == kArpHold)
+            startMin.arp.on = true;
         applyControl (startMin, ctrl, kControls[static_cast<std::size_t> (ctrl)].min);
+        if (ctrl == kArpMode || ctrl == kArpRange || ctrl == kArpRate || ctrl == kArpGate)
+            startMin.arp.on = true;
         Patch startMax = startMin;
         applyControl (startMax, ctrl, kControls[static_cast<std::size_t> (ctrl)].max);
 
@@ -1851,13 +1857,227 @@ void automationGlitch()
            "automation transitions are bit-identical across block sizes 1, 64, and 997");
 }
 
+void unisonAndArp()
+{
+    // 1. Unison live detune spreads 8 stacked voices smoothly without clicks or allocations.
+    {
+        Patch p;
+        p.osc1 = { Wave1::Saw, 0, 0 };
+        p.balance = -64;
+        p.filter = { FilterType::LowPass, true, 110, 0, 0, 0, 0, { 0, 0, 127, 10 } };
+        p.amp = { 0, 0, 127, 10 };
+        p.unison = true;
+        p.unisonDetune = 0;
+
+        Engine e0, eSpread;
+        e0.prepare (48000.0, 101u);
+        eSpread.prepare (48000.0, 101u);
+        e0.setPatch (Part::Upper, p);
+        eSpread.setPatch (Part::Upper, p);
+        e0.noteOn (60, 100);
+        eSpread.noteOn (60, 100);
+
+        std::vector<float> l0 (24000), r0 (24000), l1 (24000), r1 (24000);
+        const long allocBefore = allocations;
+        countAllocations = true;
+        e0.render (l0.data(), r0.data(), 12000);
+        eSpread.render (l1.data(), r1.data(), 12000);
+        const int stackedVoices = eSpread.activeVoices();
+
+        Patch pSpread = p;
+        pSpread.unisonDetune = 45;
+        eSpread.setPatch (Part::Upper, pSpread);
+        e0.render (l0.data() + 12000, r0.data() + 12000, 12000);
+        eSpread.render (l1.data() + 12000, r1.data() + 12000, 12000);
+        countAllocations = false;
+        check (allocations == allocBefore, "live unison_detune update allocates zero heap memory");
+        check (stackedVoices == 8, "unison engages all 8 voices");
+
+        double diff = 0.0;
+        for (int i = 13000; i < 24000; ++i)
+            diff = std::max (diff, static_cast<double> (std::abs (l1[static_cast<std::size_t> (i)] - l0[static_cast<std::size_t> (i)])));
+        check (diff > 0.02, "live unison_detune detunes held stacked voices");
+
+        Patch legatoUni = pSpread;
+        legatoUni.legato = true;
+        legatoUni.portamento = true;
+        legatoUni.portamentoTime = 20;
+        eSpread.setPatch (Part::Upper, legatoUni);
+        eSpread.noteOn (72, 100);
+        eSpread.render (l1.data(), r1.data(), 480);
+        check (eSpread.activeVoices() == 8, "unison legato/portamento keeps all 8 voices active");
+
+        Patch fb = pSpread;
+        fb.osc1.wave = Wave1::FeedbackOsc;
+        Engine eFb;
+        eFb.prepare (48000.0);
+        eFb.setPatch (Part::Upper, fb);
+        eFb.noteOn (60, 100);
+        eFb.render (l0.data(), r0.data(), 480);
+        check (eFb.activeVoices() == 1, "unison falls back to 1 voice on FeedbackOsc");
+    }
+
+    // 2. Arpeggiator modes, octave expansion, hold latch replacement, and sustain interaction.
+    {
+        auto collect = [] (ArpMode mode, int range)
+        {
+            Arpeggiator arp;
+            arp.reset (77u);
+            arp.setTempo (120.0);
+            ArpParams ap { true, mode, range, 5, 50, false }; // 1/16 at 120 BPM = 11025 ticks
+            arp.configure (ap, false);
+            arp.noteOn (64, 100, false);
+            arp.noteOn (60, 100, false);
+            arp.noteOn (67, 100, false);
+            std::vector<int> notes;
+            for (int step = 0; step < 8; ++step)
+            {
+                auto ev = arp.advance (step == 0 ? 0 : 11025);
+                if (ev.onNote >= 0)
+                    notes.push_back (ev.onNote);
+            }
+            return notes;
+        };
+
+        check ((collect (ArpMode::Up, 1) == std::vector<int> { 60, 64, 67, 72, 76, 79, 60, 64 }), "arp Up 2-oct sequence");
+        check ((collect (ArpMode::Down, 1) == std::vector<int> { 79, 76, 72, 67, 64, 60, 79, 76 }), "arp Down 2-oct sequence");
+        check ((collect (ArpMode::UpDown, 1) == std::vector<int> { 60, 64, 67, 72, 76, 79, 76, 72 }), "arp Up/Down 2-oct sequence");
+        check ((collect (ArpMode::AsPlayed, 1) == std::vector<int> { 64, 60, 67, 76, 72, 79, 64, 60 }), "arp AsPlayed 2-oct sequence");
+
+        const auto rndNotes = collect (ArpMode::Random, 1);
+        const std::vector<int> valid { 60, 64, 67, 72, 76, 79 };
+        bool allValid = rndNotes.size() == 8;
+        bool hasVariety = false;
+        for (std::size_t i = 0; i < rndNotes.size(); ++i)
+        {
+            allValid = allValid && std::find (valid.begin(), valid.end(), rndNotes[i]) != valid.end();
+            hasVariety = hasVariety || rndNotes[i] != rndNotes[0];
+        }
+        check (allValid && hasVariety, "arp Random sequence picks valid deterministic steps");
+    }
+
+    // 3. End-to-end Engine tempo sync, gate off, Hold replacement, Sustain+Arp, idle, and chunk independence.
+    {
+        Patch p;
+        p.osc1 = { Wave1::Triangle, 0, 0 };
+        p.balance = -64;
+        p.amp = { 0, 0, 127, 0 };
+        p.filter = { FilterType::LowPass, true, 127, 0, 0, 0, 0, { 0, 0, 127, 0 } };
+        p.arp = { true, ArpMode::Up, 0, 3, 50, true }; // 1/8 note, 50% gate, Hold on
+
+        Engine eng;
+        eng.prepare (48000.0, 2026u);
+        eng.setTempo (120.0); // 1/8 = 0.25 s = 12000 host frames at 48 kHz; gate 50% = 6000 frames
+        eng.setPatch (Part::Upper, p);
+        eng.noteOn (57, 100); // A3 220 Hz
+        eng.noteOn (69, 100); // A4 440 Hz
+        eng.noteOff (57);
+        eng.noteOff (69);
+
+        std::vector<float> l (24000), r (24000);
+        const long allocBefore = allocations;
+        countAllocations = true;
+        eng.render (l.data(), r.data(), 24000);
+        countAllocations = false;
+        check (allocations == allocBefore, "arpeggiator engine render allocates zero memory");
+
+        std::vector<double> step0 (l.begin() + 600, l.begin() + 5400);
+        std::vector<double> step1 (l.begin() + 12600, l.begin() + 17400);
+        near (peakHz (step0, 150.0, 600.0, 1.0, 48000.0), 220.0, 6.0, "arp step 0 plays held note 57 (220 Hz)");
+        near (peakHz (step1, 150.0, 600.0, 1.0, 48000.0), 440.0, 8.0, "arp step 1 plays held note 69 (440 Hz) at 120 BPM");
+
+        // Gate 50% drops voice during second half of step 0 (coupling cap DAC tail < 1e-3).
+        double gapAc = 0.0;
+        for (int i = 7200; i < 11400; ++i)
+            gapAc = std::max (gapAc, static_cast<double> (std::abs (l[static_cast<std::size_t> (i)] - l[7199])));
+        check (gapAc < 1e-4, "arp 50% gate closes note cleanly between steps");
+
+        // Hold latches new chord cleanly when old keys are released, then drops when Hold goes false.
+        eng.noteOn (64, 100);
+        eng.noteOff (64);
+        eng.render (l.data(), r.data(), 12000);
+        std::vector<double> heldSolo (l.begin() + 600, l.begin() + 5400);
+        near (peakHz (heldSolo, 200.0, 500.0, 1.0, 48000.0), 329.63, 8.0, "arp Hold replaces latched chord on new key");
+
+        Patch offHold = p;
+        offHold.arp.hold = false;
+        eng.setPatch (Part::Upper, offHold);
+        eng.render (l.data(), r.data(), 4800);
+        check (eng.activeVoices() == 0, "turning arp Hold off releases latched chord with zero stuck voices");
+
+        // Tempo change doubles speed (240 BPM = 0.125 s per 1/8 step = 6000 frames).
+        Engine fast;
+        fast.prepare (48000.0, 2026u);
+        fast.setTempo (240.0);
+        fast.setPatch (Part::Upper, p);
+        fast.noteOn (57, 100);
+        fast.noteOn (69, 100);
+        std::vector<float> fl (12000), fr (12000);
+        fast.render (fl.data(), fr.data(), 12000);
+        std::vector<double> f1 (fl.begin() + 6300, fl.begin() + 8700);
+        near (peakHz (f1, 150.0, 600.0, 1.0, 48000.0), 440.0, 12.0, "arp follows host tempo 240 BPM");
+
+        // Sustain holds arp pool while each step still obeys gate-off.
+        Engine sus;
+        sus.prepare (48000.0, 2026u);
+        sus.setTempo (120.0);
+        Patch susPatch = p;
+        susPatch.arp.hold = false;
+        sus.setPatch (Part::Upper, susPatch);
+        sus.sustain (true);
+        sus.noteOn (60, 100);
+        sus.noteOff (60);
+        sus.render (fl.data(), fr.data(), 9600);
+        double gateAc = 0.0;
+        for (int i = 7200; i < 9600; ++i)
+            gateAc = std::max (gateAc, static_cast<double> (std::abs (fl[static_cast<std::size_t> (i)] - fl[7199])));
+        check (gateAc < 1e-4, "sustain pedal holds arp pattern without blocking step gate-off");
+        sus.sustain (false);
+        sus.render (fl.data(), fr.data(), 4800);
+        check (sus.activeVoices() == 0, "releasing sustain pedal stops non-held arp with zero stuck voices");
+
+        // Block-size independence (1 vs 64 vs 997) with Unison + Arp + Tempo running.
+        auto runChunks = [] (int chunk)
+        {
+            Patch uniArp;
+            uniArp.osc1 = { Wave1::SuperSaw, 40, 60 };
+            uniArp.balance = -64;
+            uniArp.unison = true;
+            uniArp.unisonDetune = 18;
+            uniArp.arp = { true, ArpMode::UpDown, 1, 5, 65, true };
+            Engine e;
+            e.prepare (48000.0, 99u);
+            e.setTempo (138.0);
+            e.setPatch (Part::Upper, uniArp);
+            e.noteOn (48, 100);
+            e.noteOn (55, 90);
+            e.noteOn (60, 110);
+            constexpr int len = 18000;
+            std::vector<float> outL (len), outR (len);
+            int pos = 0;
+            while (pos < len)
+            {
+                const int step = std::min (chunk, len - pos);
+                e.render (outL.data() + pos, outR.data() + pos, step);
+                pos += step;
+            }
+            return std::pair<std::vector<float>, std::vector<float>> { std::move (outL), std::move (outR) };
+        };
+        const auto [u1L, u1R] = runChunks (1);
+        const auto [u64L, u64R] = runChunks (64);
+        const auto [u997L, u997R] = runChunks (997);
+        check (u1L == u64L && u1R == u64R && u1L == u997L && u1R == u997R,
+               "Unison + Arp rendering is bit-identical across chunk sizes 1, 64, and 997");
+    }
+}
+
 int main (int argc, char** argv)
 {
     const std::pair<const char*, std::function<void()>> suites[] {
         { "SuperSaw", superSaw }, { "HardwareRecording", hardwareRecording }, { "MeasuredLaws", measuredLaws }, { "Filter", filter }, { "Circuit", circuit },
         { "Engine", engine }, { "Feedback", feedback }, { "Effects", effects }, { "Stability", stability }, { "Timing", timing }, { "Modulation", modulation }, { "ToneControl", toneControl }, { "SustainLaw", sustainLaw }, { "KeyFollowShift", keyFollowShift }, { "XmodDestination", xmodDestination }, { "EffectLevels", effectLevels }, { "Controls", controls },
         { "TriangleShape", triangleShape }, { "MultiFxTypes", multiFxTypes }, { "EnvelopeSmoother", envelopeSmoother }, { "ToneSaturation", toneSaturation }, { "Osc2AndSync", osc2AndSync }, { "ControlAccuracy", controlAccuracy }, { "AnalogColor", analogColor },
-        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch } };
+        { "FixedPointAndMatrix", fixedPointAndMatrix }, { "AutomationGlitch", automationGlitch }, { "UnisonAndArp", unisonAndArp } };
     for (const auto& [name, run] : suites)
         if (argc < 2 || std::string (argv[1]) == name)
             run();

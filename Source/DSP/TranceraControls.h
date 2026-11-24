@@ -33,6 +33,7 @@ enum Control : int
     kLfo1Wave, kLfo1Rate, kLfo1Fade, kLfo2Rate, kLfo2Pitch, kLfo2Filter, kLfo2Amp,
     kBass, kTreble, kChorusType, kChorusLevel, kDelayType, kDelayTime, kDelayFeedback, kDelayLevel,
     kMono, kLegato, kPortamento, kPortamentoTime, kOscShift, kBendRange, kVelocity,
+    kUnison, kUnisonDetune, kArp, kArpMode, kArpRange, kArpRate, kArpGate, kArpHold,
     kControlCount
 };
 
@@ -96,6 +97,14 @@ inline constexpr std::array<ControlInfo, kControlCount> kControls { {
     { "osc_shift", "Osc Shift", -2, 2, 0, 0 },
     { "bend_range", "Bend Range", 0, 24, 2, 0 },
     { "velocity", "Velocity", 0, 127, 0, 0 },
+    { "unison", "Unison", 0, 1, 0, 2 },
+    { "unison_detune", "Unison Detune", 0, 50, 12, 0 },
+    { "arp", "Arp", 0, 1, 0, 2 },
+    { "arp_mode", "Arp Mode", 0, 4, 0, 5 },
+    { "arp_range", "Arp Range", 0, 3, 0, 4 },
+    { "arp_rate", "Arp Rate", 0, 7, 5, 8 },
+    { "arp_gate", "Arp Gate", 10, 100, 75, 0 },
+    { "arp_hold", "Arp Hold", 0, 1, 0, 2 },
 } };
 
 // The patch with one control set; out-of-range values are clamped.

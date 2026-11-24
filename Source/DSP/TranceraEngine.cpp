@@ -95,6 +95,8 @@ void Engine::reset() noexcept
     }
     output_.reset();
     resampler_.reset();
+    arp_.reset (seed_ ^ 0xA2B1u);
+    arp_.setTempo (tempo_);
     bend_ = mod_ = 0.0;
     sustain_ = false;
     everTriggered_ = false;
@@ -200,6 +202,7 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
         silentTicks_ = 0;
     const int part = static_cast<int> (which);
     PartState& s = parts_[static_cast<std::size_t> (part)];
+    const bool prevArpOn = parts_[0].patch.arp.on;
     const bool becameMono = monophonic (patch)
                             && (! monophonic (s.patch) || unison (patch) != unison (s.patch));
     s.patch = patch;
@@ -250,10 +253,50 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
         v.filterEnv.configure (vp.filter.env.attack, vp.filter.env.decay,
                                mapping::filterSustain (vp.filter.env.sustain), vp.filter.env.release);
         v.pitchEnv.configure (vp.pitchAttack, vp.pitchDecay, 0.0, vp.pitchDecay);
+        if (unison (patch))
+            v.detune = range.count > 1 ? patch.unisonDetune * (2.0 * (i - range.first) / (range.count - 1) - 1.0) / 100.0 : 0.0;
+        else
+            v.detune = 0.0;
         if (becameMono && i - range.first >= (unison (patch) ? range.count : 1))
             release (v);
         if (v.active)
             controlVoice (v, part, false);
+    }
+
+    if (part == 0)
+    {
+        arp_.configure (patch.arp, sustain_);
+        if (prevArpOn && ! patch.arp.on)
+        {
+            if (arp_.playingNote() >= 0)
+                voiceNoteOff (arp_.playingNote(), false);
+            arp_.clear();
+        }
+        else if (! prevArpOn && patch.arp.on)
+        {
+            PartState& upper = parts_[0];
+            std::array<HeldNote, 128> savedKeys {};
+            const int savedCount = upper.keyCount;
+            for (int i = 0; i < savedCount; ++i)
+                savedKeys[static_cast<std::size_t> (i)] = upper.keys[static_cast<std::size_t> (i)];
+            for (int i = 0; i < savedCount; ++i)
+                voiceNoteOff (savedKeys[static_cast<std::size_t> (i)].note, false);
+            for (int i = 0; i < savedCount; ++i)
+            {
+                const HeldNote hn = savedKeys[static_cast<std::size_t> (i)];
+                arp_.seedHeld (hn.note, hn.velocity);
+            }
+            if (savedCount > 0)
+            {
+                everTriggered_ = true;
+                silentTicks_ = 0;
+            }
+        }
+        else if (patch.arp.on && arp_.count() == 0 && arp_.playingNote() >= 0)
+        {
+            voiceNoteOff (arp_.playingNote(), false);
+            arp_.clearPlayingNote();
+        }
     }
 }
 
@@ -411,22 +454,13 @@ void Engine::startPart (int part, int note, int velocity) noexcept
     s.hasPlayed = true;
 }
 
-void Engine::noteOn (int note, int velocity) noexcept
+void Engine::voiceNoteOn (int note, int velocity) noexcept
 {
-    if (note < 0 || note > 127)
-        return;
-    if (velocity <= 0)
-    {
-        noteOff (note);
-        return;
-    }
-    everTriggered_ = true;
-    silentTicks_ = 0;
     for (int part = 0; part < partCount(); ++part)
-        startPart (part, note, std::min (velocity, 127));
+        startPart (part, note, velocity);
 }
 
-void Engine::noteOff (int note) noexcept
+void Engine::voiceNoteOff (int note, bool obeySustain) noexcept
 {
     for (int part = 0; part < partCount(); ++part)
     {
@@ -451,7 +485,7 @@ void Engine::noteOff (int note) noexcept
             Voice& v = voices_[static_cast<std::size_t> (i)];
             if (! v.held || v.note != note)
                 continue;
-            if (sustain_)
+            if (obeySustain && sustain_)
             {
                 v.held = false;
                 v.sustained = true;
@@ -462,8 +496,43 @@ void Engine::noteOff (int note) noexcept
     }
 }
 
+void Engine::noteOn (int note, int velocity) noexcept
+{
+    if (note < 0 || note > 127)
+        return;
+    if (velocity <= 0)
+    {
+        noteOff (note);
+        return;
+    }
+    everTriggered_ = true;
+    silentTicks_ = 0;
+    if (parts_[0].patch.arp.on)
+    {
+        arp_.noteOn (note, std::min (velocity, 127), sustain_);
+        return;
+    }
+    voiceNoteOn (note, std::min (velocity, 127));
+}
+
+void Engine::noteOff (int note) noexcept
+{
+    if (parts_[0].patch.arp.on)
+    {
+        arp_.noteOff (note, sustain_);
+        if (arp_.count() == 0 && arp_.playingNote() >= 0)
+        {
+            voiceNoteOff (arp_.playingNote(), false);
+            arp_.clearPlayingNote();
+        }
+        return;
+    }
+    voiceNoteOff (note, true);
+}
+
 void Engine::allNotesOff() noexcept
 {
+    arp_.clear();
     for (Voice& v : voices_)
         release (v);
     for (PartState& s : parts_)
@@ -473,10 +542,27 @@ void Engine::allNotesOff() noexcept
 void Engine::sustain (bool down) noexcept
 {
     sustain_ = down;
+    if (parts_[0].patch.arp.on)
+    {
+        arp_.setSustain (down);
+        if (! down && arp_.count() == 0 && arp_.playingNote() >= 0)
+        {
+            voiceNoteOff (arp_.playingNote(), false);
+            arp_.clearPlayingNote();
+        }
+        return;
+    }
     if (! down)
         for (Voice& v : voices_)
             if (v.sustained)
                 release (v);
+}
+
+void Engine::setTempo (double bpm) noexcept
+{
+    const double clamped = std::clamp (bpm, 20.0, 300.0);
+    tempo_ = clamped;
+    arp_.setTempo (tempo_);
 }
 
 void Engine::setTune (double cents) noexcept
@@ -1018,15 +1104,34 @@ void Engine::renderTicks (Stereo* out, int count) noexcept
     int pos = 0;
     while (pos < count)
     {
+        while (arp_.active() && arp_.ticksUntilEvent() == 0)
+        {
+            const auto ev = arp_.advance (0);
+            if (ev.offNote >= 0)
+                voiceNoteOff (ev.offNote, false);
+            if (ev.onNote >= 0)
+                voiceNoteOn (ev.onNote, ev.onVel);
+            if (ev.offNote < 0 && ev.onNote < 0)
+                break;
+        }
         if (untilControl_ <= 1)
         {
             untilControl_ = kEnvelopeInterval + 1;
             control();
         }
-        const int n = std::min ({ count - pos, untilControl_ - 1, kChunkSize });
+        const int arpStep = arp_.active() ? std::max (1, arp_.ticksUntilEvent()) : kChunkSize;
+        const int n = std::min ({ count - pos, untilControl_ - 1, arpStep, kChunkSize });
         untilControl_ -= n;
         renderChunk (out + pos, n);
         pos += n;
+        if (arp_.active())
+        {
+            const auto ev = arp_.advance (n);
+            if (ev.offNote >= 0)
+                voiceNoteOff (ev.offNote, false);
+            if (ev.onNote >= 0)
+                voiceNoteOn (ev.onNote, ev.onVel);
+        }
     }
 }
 
@@ -1064,7 +1169,7 @@ void Engine::render (float* left, float* right, int frames) noexcept
     for (const Voice& v : voices_)
         if (v.active) { anyActive = true; break; }
 
-    if (! everTriggered_ || (! anyActive && silentTicks_ >= kIdleTicksThreshold))
+    if (! arp_.active() && (! everTriggered_ || (! anyActive && silentTicks_ >= kIdleTicksThreshold)))
     {
         std::fill_n (left, frames, 0.0f);
         std::fill_n (right, frames, 0.0f);

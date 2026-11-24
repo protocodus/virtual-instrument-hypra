@@ -2,6 +2,7 @@
 #pragma once
 
 #include "AnalogOutput.h"
+#include "Arpeggiator.h"
 #include "Effects.h"
 #include "Envelope.h"
 #include "Filter.h"
@@ -45,6 +46,7 @@ public:
     void pitchBend (double value) noexcept;
     void modWheel (double value) noexcept;
     void sustain (bool down) noexcept;
+    void setTempo (double bpm) noexcept;
 
     void render (float* left, float* right, int frames) noexcept;
     [[nodiscard]] int activeVoices() const noexcept;
@@ -102,6 +104,8 @@ private:
     [[nodiscard]] int partCount() const noexcept { return mode_ == KeyMode::Dual ? 2 : 1; }
     void startPart (int part, int note, int velocity) noexcept;
     void startMono (int part, int note, int velocity, bool retrigger) noexcept;
+    void voiceNoteOn (int note, int velocity) noexcept;
+    void voiceNoteOff (int note, bool obeySustain) noexcept;
     void trigger (Voice& voice, int part, int note, int velocity, bool retrigger, bool mayGlide) noexcept;
     void release (Voice& voice) noexcept;
     void control() noexcept;
@@ -116,12 +120,13 @@ private:
     std::array<PartState, 2> parts_ {};
     AnalogOutput output_;
     Resampler resampler_;
+    Arpeggiator arp_;
     Random random_;
     KeyMode mode_ { KeyMode::Single };
     std::uint32_t seed_ { 8000 };
     std::uint64_t order_ { 0 };
     double hostRate_ { 44100.0 };
-    double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, tune_ { 0.0 };
+    double bend_ { 0.0 }, mod_ { 0.0 }, volume_ { 1.0 }, tune_ { 0.0 }, tempo_ { 120.0 };
     int partDetune_ { 0 }, untilControl_ { kEnvelopeInterval }, silentTicks_ { 0 };
     bool sustain_ { false }, everTriggered_ { false };
 };

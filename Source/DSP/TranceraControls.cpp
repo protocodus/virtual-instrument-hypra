@@ -53,6 +53,10 @@ int* field (Patch& p, int control) noexcept
         case kPortamentoTime: return &p.portamentoTime;
         case kOscShift: return &p.oscShift;
         case kVelocity: return &p.velocityAmp;
+        case kUnisonDetune: return &p.unisonDetune;
+        case kArpRange: return &p.arp.range;
+        case kArpRate: return &p.arp.rate;
+        case kArpGate: return &p.arp.gate;
         default: return nullptr;
     }
 }
@@ -86,6 +90,10 @@ void applyControl (Patch& p, int control, int value) noexcept
         case kLegato: p.legato = v != 0; break;
         case kPortamento: p.portamento = v != 0; break;
         case kBendRange: p.bendUp = p.bendDown = v; break;
+        case kUnison: p.unison = v != 0; break;
+        case kArp: p.arp.on = v != 0; break;
+        case kArpMode: p.arp.mode = static_cast<ArpMode> (v); break;
+        case kArpHold: p.arp.hold = v != 0; break;
         default: break;
     }
 }
@@ -114,6 +122,10 @@ int controlValue (const Patch& patch, int control) noexcept
         case kLegato: return p.legato ? 1 : 0;
         case kPortamento: return p.portamento ? 1 : 0;
         case kBendRange: return p.bendUp;
+        case kUnison: return p.unison ? 1 : 0;
+        case kArp: return p.arp.on ? 1 : 0;
+        case kArpMode: return static_cast<int> (p.arp.mode);
+        case kArpHold: return p.arp.hold ? 1 : 0;
         default: return 0;
     }
 }
