@@ -99,6 +99,8 @@ void applyControl (Patch& p, int control, int value) noexcept
         case kArp: p.arp.on = v != 0; break;
         case kArpMode: p.arp.mode = static_cast<ArpMode> (v); break;
         case kArpHold: p.arp.hold = v != 0; break;
+        case kLfo1Sync: p.lfo1.sync = v != 0; break;
+        case kLfo1Retrig: p.lfo1.retrig = v != 0; break;
         default: break;
     }
 }
@@ -131,6 +133,8 @@ int controlValue (const Patch& patch, int control) noexcept
         case kArp: return p.arp.on ? 1 : 0;
         case kArpMode: return static_cast<int> (p.arp.mode);
         case kArpHold: return p.arp.hold ? 1 : 0;
+        case kLfo1Sync: return p.lfo1.sync ? 1 : 0;
+        case kLfo1Retrig: return p.lfo1.retrig ? 1 : 0;
         default: return 0;
     }
 }

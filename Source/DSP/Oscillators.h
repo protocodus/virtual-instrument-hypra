@@ -774,6 +774,8 @@ public:
             last2_ = 0;
             dc_ = 0;
             noise_.reset (random);
+            noise2S1_ = wrap24 (static_cast<std::int32_t> (random.next() >> 8));
+            noise2S2_ = wrap24 (static_cast<std::int32_t> (random.next() >> 8)) >> 1;
             feedback_.reset();
             shapeMoving_ = pw2Moving_ = balMoving_ = pitchMoving_ = fmMoving_ = false;
             modeFade_ = 0;
@@ -954,6 +956,8 @@ public:
             const Q23 effNew = (fmGain_ > 0 && c_.wave1 != Wave1::SuperSaw && c_.wave1 != Wave1::Noise) ? inc1Fm : inc1_;
             const auto [firstOld, masterOld] = evalWave1 (prevC_.wave1, effOld);
             const auto [firstNew, masterNew] = evalWave1 (c_.wave1, effNew);
+            const bool needNoise2 = c_.wave2 == Wave2::Noise || prevC_.wave2 == Wave2::Noise;
+            const Q23 noise2Val = needNoise2 ? nextOsc2NoiseQ23() : 0;
 
             auto evalWave2 = [&] (const Controls& cfg, Q23 firstSig, Q23 masterPh, Q23 effInc) noexcept -> std::pair<Q23, Q23>
             {
@@ -965,6 +969,7 @@ public:
                         case Wave2::Square:   sec = osc::syncPulseQ23 (masterPh, effInc, inc2_, ratioQ16_, pw2_); break;
                         case Wave2::Saw:      sec = osc::syncSawQ23 (masterPh, effInc, inc2_, ratioQ16_); break;
                         case Wave2::Triangle: sec = osc::syncTriangleQ23 (masterPh, effInc, ratioQ16_); break;
+                        case Wave2::Noise:    sec = noise2Val; break;
                     }
                 }
                 else
@@ -974,6 +979,7 @@ public:
                         case Wave2::Square:   sec = osc::pulseQ23 (p2_, inc2_, pw2_); break;
                         case Wave2::Saw:      sec = osc::osc2SawFastQ23 (p2_, osc2SawWin_); break;
                         case Wave2::Triangle: sec = osc::osc2TriangleQ23 (p2_); break;
+                        case Wave2::Noise:    sec = noise2Val; break;
                     }
                 }
                 const Q23 outSec = cfg.ring ? sat24 ((static_cast<std::int64_t> (firstSig) * sec) >> 21) : sec;
@@ -1026,6 +1032,7 @@ public:
                 case Wave2::Square:   second = osc::syncPulseQ23 (masterPhase, inc1Eff, inc2_, ratioQ16_, pw2_); break;
                 case Wave2::Saw:      second = osc::syncSawQ23 (masterPhase, inc1Eff, inc2_, ratioQ16_); break;
                 case Wave2::Triangle: second = osc::syncTriangleQ23 (masterPhase, inc1Eff, ratioQ16_); break;
+                case Wave2::Noise:    second = nextOsc2NoiseQ23(); break;
             }
         }
         else
@@ -1036,6 +1043,7 @@ public:
                 case Wave2::Square:   second = osc::pulseQ23 (p2_, inc2_, pw2_); break;
                 case Wave2::Saw:      second = osc::osc2SawFastQ23 (p2_, osc2SawWin_); break;
                 case Wave2::Triangle: second = osc::osc2TriangleQ23 (p2_); break;
+                case Wave2::Noise:    second = nextOsc2NoiseQ23(); break;
             }
         }
         last2_ = c_.wave2 == Wave2::Triangle ? sat24 ((static_cast<std::int64_t> (second) * 8) / 5) : second;
@@ -1235,6 +1243,15 @@ public:
     double process (Random& random) noexcept { return fromQ23 (processQ23 (random)); }
 
 private:
+    TRANCERA_FORCE_INLINE Q23 nextOsc2NoiseQ23() noexcept
+    {
+        const Q23 nextS1 = wrap24 (0x3E7900 + mulImmediate15 (noise2S1_, -116, 83, 6) + mulImmediate15 (noise2S2_, 127, 62, 7));
+        const Q23 nextS2 = wrap24 (mulImmediate15 (nextS1, -127, 58, 6) + mulImmediate15 (noise2S2_, 126, 39, 6)) >> 1;
+        noise2S1_ = nextS1;
+        noise2S2_ = nextS2;
+        return mul8 (nextS2, 30, 6);
+    }
+
     TRANCERA_FORCE_INLINE void advanceOsc2Idle (int sub) noexcept
     {
         p2_ = wrap24 (static_cast<std::int32_t> (static_cast<std::int64_t> (p2_)
@@ -1245,6 +1262,10 @@ private:
             case Wave2::Square:   second = osc::pulseQ23 (p2_, inc2_, pw2_); break;
             case Wave2::Saw:      second = osc::osc2SawFastQ23 (p2_, osc2SawWin_); break;
             case Wave2::Triangle: second = osc::osc2TriangleQ23 (p2_); break;
+            case Wave2::Noise:
+                for (int k = 0; k < sub; ++k)
+                    second = nextOsc2NoiseQ23();
+                break;
         }
         last2_ = c_.wave2 == Wave2::Triangle ? sat24 ((static_cast<std::int64_t> (second) * 8) / 5) : second;
     }
@@ -1308,6 +1329,17 @@ private:
                     dst[k] = y;
                 }
                 break;
+            case Wave2::Noise:
+                for (int k = 0; k < sub; ++k)
+                {
+                    p2 = wrap24 (p2 + inc2);
+                    lastSec = nextOsc2NoiseQ23();
+                    const Q23 mix = sat24 (mulSplit15 (src[k], iHi, iLo) + mulSplit15 (lastSec, bHi, bLo));
+                    const Q23 y = sat24 (mix + dc);
+                    dc = sat24 (dc + mulImmediate15 (y, -1, 120, 7));
+                    dst[k] = y;
+                }
+                break;
         }
         p2_ = p2;
         dc_ = dc;
@@ -1323,6 +1355,7 @@ private:
     Q23 shape_ { 0 }, shapeTarget_ { 0 };
     Q23 pw2_ { 0 }, pw2Target_ { 0 };
     Q23 last2_ { 0 }, fmGain_ { 0 }, fmTarget_ { 0 }, dc_ { 0 };
+    Q23 noise2S1_ { 0 }, noise2S2_ { 0 };
     std::int64_t ratioQ16_ { 65536 }, exactRatioQ16_ { 65536 };
     int modeFade_ { 0 };
     bool fm_ { false }, shapeMoving_ { false }, pw2Moving_ { false }, balMoving_ { false };

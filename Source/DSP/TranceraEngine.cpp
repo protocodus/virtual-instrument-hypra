@@ -155,7 +155,8 @@ void Engine::reset() noexcept
     {
         s.lfoRandom = Random (partSeed++);
         s.keyCount = 0;
-        s.lfo1Phase = s.lfo2Phase = 0;
+        s.lfo1Phase32 = 0u;
+        s.lfo2Phase = 0;
         s.lfoHeld = s.lfo1 = s.lfo2 = 0.0;
         s.effAmpLfo = s.patch.ampLfo;
         s.lastPitch = 60.0;
@@ -285,7 +286,7 @@ void Engine::setPatch (Part which, const Patch& patch) noexcept
     const bool becameMono = monophonic (patch)
                             && (! monophonic (s.patch) || monoUnison (patch) != monoUnison (s.patch));
     s.patch = patch;
-    s.lfo1Step = mapping::lfo1RateTable[static_cast<std::size_t> (std::clamp (patch.lfo1.rate, 0, 127))];
+    s.lfo1Step32 = mapping::lfo1Step32 (patch.lfo1.rate, patch.lfo1.sync, tempo_);
     s.lfo2Step = mapping::lfo2RateTable[static_cast<std::size_t> (std::clamp (patch.lfo2.rate, 0, 127))];
     s.effAmpLfo = patch.ampLfo;
     const EffectParams& fx = patch.effects;
@@ -420,7 +421,7 @@ void Engine::trigger (Voice& v, int part, int note, int velocity, bool retrigger
             s.toneR.configure (fx.bass, fx.treble);
             s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay, fx.delaySync, tempo_);
             s.chorus.configure (fx.chorusType, fx.chorus);
-            s.lfo1Step = mapping::lfo1RateTable[static_cast<std::size_t> (std::clamp (v.patch.lfo1.rate, 0, 127))];
+            s.lfo1Step32 = mapping::lfo1Step32 (v.patch.lfo1.rate, v.patch.lfo1.sync, tempo_);
             s.lfo2Step = mapping::lfo2RateTable[static_cast<std::size_t> (std::clamp (v.patch.lfo2.rate, 0, 127))];
             s.effAmpLfo = v.patch.ampLfo;
             if (s.patch.pan == PanMode::Manual)
@@ -519,6 +520,19 @@ void Engine::startPart (int part, int note, int velocity) noexcept
 {
     PartState& s = parts_[static_cast<std::size_t> (part)];
     const bool overlapping = s.keyCount > 0;
+    if (s.patch.lfo1.retrig && ! (monophonic (s.patch) && s.patch.legato && overlapping))
+    {
+        s.lfo1Phase32 = 0u;
+        if (s.patch.lfo1.wave == LfoWave::SampleHold)
+            s.lfoHeld = s.lfoRandom.bipolarValue();
+        evaluateLfo1 (s, false, false);
+        if (s.patch.pan == PanMode::Auto)
+        {
+            const Stereo gains = mapping::panGains (mapping::ampLfoDepth (s.effAmpLfo) * s.lfo1);
+            s.panTargetLQ23 = toQ23 (gains.l);
+            s.panTargetRQ23 = toQ23 (gains.r);
+        }
+    }
     int kept = 0;
     for (int i = 0; i < s.keyCount; ++i)
         if (s.keys[static_cast<std::size_t> (i)].note != note)
@@ -702,6 +716,8 @@ void Engine::setTempo (double bpm) noexcept
         const EffectParams& fx = s.patch.effects;
         if (fx.delaySync > 0)
             s.delay.configure (fx.delayType, fx.delayTime, fx.feedback, fx.delay, fx.delaySync, tempo_);
+        if (s.patch.lfo1.sync)
+            s.lfo1Step32 = mapping::lfo1Step32 (s.patch.lfo1.rate, true, tempo_);
     }
 }
 
@@ -867,42 +883,48 @@ void Engine::controlVoice (Voice& v, int part, bool advanceTick) noexcept
     v.ampMoving = v.ampSmoothedQ23 != v.ampTargetQ23;
 }
 
+void Engine::evaluateLfo1 (PartState& s, bool wrapped, bool halfToggle) noexcept
+{
+    const std::uint16_t phase16 = static_cast<std::uint16_t> (s.lfo1Phase32 >> 16);
+    switch (s.patch.lfo1.wave)
+    {
+        case LfoWave::Triangle:
+        {
+            const std::uint16_t shifted = static_cast<std::uint16_t> (phase16 + 0x4000u);
+            const std::int32_t tri = shifted < 32768u ? (static_cast<std::int32_t> (shifted) * 2 - 32768)
+                                                      : (98304 - static_cast<std::int32_t> (shifted) * 2);
+            s.lfo1 = static_cast<double> (tri) * (1.0 / 32768.0);
+            s.lfoEdge = false;
+            break;
+        }
+        case LfoWave::Saw:
+            s.lfo1 = 1.0 - static_cast<double> (phase16) * (1.0 / 32768.0);
+            s.lfoEdge = wrapped;
+            break;
+        case LfoWave::Square:
+            s.lfo1 = (phase16 & 0x8000u) == 0u ? 1.0 : -1.0;
+            s.lfoEdge = halfToggle;
+            break;
+        case LfoWave::SampleHold:
+            s.lfo1 = s.lfoHeld;
+            s.lfoEdge = halfToggle;
+            break;
+    }
+}
+
 void Engine::control() noexcept
 {
     for (int part = 0; part < partCount(); ++part)
     {
         PartState& s = parts_[static_cast<std::size_t> (part)];
-        const std::uint16_t prevPhase = s.lfo1Phase;
-        s.lfo1Phase = static_cast<std::uint16_t> (s.lfo1Phase + s.lfo1Step);
-        const bool wrapped = s.lfo1Phase < prevPhase;
-        const bool halfToggle = wrapped || (((prevPhase ^ s.lfo1Phase) & 0x8000u) != 0u);
+        const std::uint32_t prevPhase = s.lfo1Phase32;
+        s.lfo1Phase32 = prevPhase + s.lfo1Step32;
+        const bool wrapped = s.lfo1Phase32 < prevPhase;
+        const bool halfToggle = wrapped || (((prevPhase ^ s.lfo1Phase32) & 0x80000000u) != 0u);
         if (halfToggle)
             s.lfoHeld = s.lfoRandom.bipolarValue();
 
-        switch (s.patch.lfo1.wave)
-        {
-            case LfoWave::Triangle:
-            {
-                const std::uint16_t shifted = static_cast<std::uint16_t> (s.lfo1Phase + 0x4000u);
-                const std::int32_t tri = shifted < 32768u ? (static_cast<std::int32_t> (shifted) * 2 - 32768)
-                                                          : (98304 - static_cast<std::int32_t> (shifted) * 2);
-                s.lfo1 = static_cast<double> (tri) * (1.0 / 32768.0);
-                s.lfoEdge = false;
-                break;
-            }
-            case LfoWave::Saw:
-                s.lfo1 = 1.0 - static_cast<double> (s.lfo1Phase) * (1.0 / 32768.0);
-                s.lfoEdge = wrapped;
-                break;
-            case LfoWave::Square:
-                s.lfo1 = (s.lfo1Phase & 0x8000u) == 0u ? 1.0 : -1.0;
-                s.lfoEdge = halfToggle;
-                break;
-            case LfoWave::SampleHold:
-                s.lfo1 = s.lfoHeld;
-                s.lfoEdge = halfToggle;
-                break;
-        }
+        evaluateLfo1 (s, wrapped, halfToggle);
         s.lfo2Phase = static_cast<std::uint16_t> (s.lfo2Phase + s.lfo2Step);
         const std::uint16_t lfo2Shifted = static_cast<std::uint16_t> (s.lfo2Phase + 0x4000u);
         const std::int32_t tri2 = lfo2Shifted < 32768u ? (static_cast<std::int32_t> (lfo2Shifted) * 2 - 32768)

@@ -547,6 +547,23 @@ inline double lfoHz (int value) noexcept
     return static_cast<double> (lfo1RateTable[idx]) * (50.0 / 32768.0);
 }
 
+// 15 tempo-sync divisions (slow -> fast): 4/1 .. 1/32 beats at host BPM.
+inline constexpr std::array<double, 15> lfo1SyncBeats {
+    16.0, 8.0, 4.0, 3.0, 2.0, 1.5, 4.0 / 3.0, 1.0, 0.75, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125
+};
+
+inline std::uint32_t lfo1Step32 (int rate, bool sync, double bpm) noexcept
+{
+    const int r = std::clamp (rate, 0, 127);
+    if (! sync)
+        return static_cast<std::uint32_t> (lfo1RateTable[static_cast<std::size_t> (r)]) << 16;
+    const int divIdx = (r * static_cast<int> (lfo1SyncBeats.size())) / 128;
+    const double clampedBpm = std::clamp (bpm, 20.0, 300.0);
+    const double periodSec = (60.0 / clampedBpm) * lfo1SyncBeats[static_cast<std::size_t> (divIdx)];
+    const double step = (4294967296.0 / (periodSec * kEnvelopeRate)) + 0.5;
+    return static_cast<std::uint32_t> (std::clamp (step, 1.0, 2147483647.0));
+}
+
 inline double lfo2Hz (int value) noexcept
 {
     const auto idx = static_cast<std::size_t> (std::clamp (value, 0, 127));

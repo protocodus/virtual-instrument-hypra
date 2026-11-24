@@ -35,6 +35,7 @@ enum Control : int
     kMono, kLegato, kPortamento, kPortamentoTime, kOscShift, kBendRange, kVelocity,
     kUnison, kUnisonDetune, kArp, kArpMode, kArpRange, kArpRate, kArpGate, kArpHold,
     kFilterVelocity, kAftertouchCutoff, kAftertouchLfo2, kUnisonSpread, kDelaySync,
+    kLfo1Sync, kLfo1Retrig,
     kControlCount
 };
 
@@ -44,7 +45,7 @@ inline constexpr std::array<ControlInfo, kControlCount> kControls { {
     { "osc1_wave", "Osc 1 Wave", 0, 6, 0, 7 },
     { "osc1_ctrl1", "Osc 1 Control 1", 0, 127, 0, 0 },
     { "osc1_ctrl2", "Osc 1 Control 2", 0, 127, 0, 0 },
-    { "osc2_wave", "Osc 2 Wave", 0, 2, 1, 3 },
+    { "osc2_wave", "Osc 2 Wave", 0, 3, 1, 4 },
     { "osc2_sync", "Osc 2 Sync", 0, 1, 0, 2 },
     { "osc2_range", "Osc 2 Range", -25, 25, 0, 0 },
     { "osc2_fine", "Osc 2 Fine", -50, 50, 0, 0 },
@@ -111,6 +112,8 @@ inline constexpr std::array<ControlInfo, kControlCount> kControls { {
     { "aftertouch_lfo2", "Aftertouch LFO 2", 0, 127, 0, 0 },
     { "unison_spread", "Unison Spread", 0, 100, 0, 0 },
     { "delay_sync", "Delay Sync", 0, 11, 0, 12 },
+    { "lfo1_sync", "LFO 1 Sync", 0, 1, 0, 2 },
+    { "lfo1_retrig", "LFO 1 Retrig", 0, 1, 0, 2 },
 } };
 
 // The patch with one control set; out-of-range values are clamped.

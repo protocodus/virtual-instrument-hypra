@@ -221,7 +221,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
           </select>
         </label>
         <label class="field">Device Version
-          <input id="optVersion" type="text" value="0.9.4d1" style="width:76px; font-family:var(--mono)">
+          <input id="optVersion" type="text" value="0.9.5d1" style="width:76px; font-family:var(--mono)">
         </label>
         <label class="field"><input id="optAllParts" type="checkbox"> Include Lower Perf Parts</label>
         <label class="field"><input id="optLenient" type="checkbox"> Ignore Checksum Errors</label>
@@ -276,12 +276,12 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
 (() => {
   'use strict';
 
-  // Exact copy of TranceraControls.h kControls[0..69]: [id, name, min, max, initial, steps]
+  // Exact copy of TranceraControls.h kControls[0..71]: [id, name, min, max, initial, steps]
   const CONTROLS = [
     ['osc1_wave', 'Osc 1 Wave', 0, 6, 0, 7],
     ['osc1_ctrl1', 'Osc 1 Control 1', 0, 127, 0, 0],
     ['osc1_ctrl2', 'Osc 1 Control 2', 0, 127, 0, 0],
-    ['osc2_wave', 'Osc 2 Wave', 0, 2, 1, 3],
+    ['osc2_wave', 'Osc 2 Wave', 0, 3, 1, 4],
     ['osc2_sync', 'Osc 2 Sync', 0, 1, 0, 2],
     ['osc2_range', 'Osc 2 Range', -25, 25, 0, 0],
     ['osc2_fine', 'Osc 2 Fine', -50, 50, 0, 0],
@@ -347,7 +347,9 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
     ['aftertouch_cutoff', 'Aftertouch Cutoff', -64, 63, 0, 0],
     ['aftertouch_lfo2', 'Aftertouch LFO 2', 0, 127, 0, 0],
     ['unison_spread', 'Unison Spread', 0, 100, 0, 0],
-    ['delay_sync', 'Delay Sync', 0, 11, 0, 12]
+    ['delay_sync', 'Delay Sync', 0, 11, 0, 12],
+    ['lfo1_sync', 'LFO 1 Sync', 0, 1, 0, 2],
+    ['lfo1_retrig', 'LFO 1 Retrig', 0, 1, 0, 2]
   ];
   const CTRL_BY_ID = Object.fromEntries(CONTROLS.map((c, idx) => [c[0], { id: c[0], name: c[1], min: c[2], max: c[3], initial: c[4], steps: c[5], idx }]));
   const WAVE1_NAMES = ['Super Saw', 'Tri Mod', 'Noise', 'Feedback', 'Square', 'Saw', 'Triangle'];
@@ -601,8 +603,8 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
       ctrl.osc1_ctrl2 = clamp(b(0x20, 0), 0, 127);
 
       const rawW2 = clamp(b(0x21, 1), 0, 3);
-      if (rawW2 === 3) { ctrl.osc2_wave = 2; warn.osc2NoiseMappedToTriangle = true; rackBytes = true; }
-      else ctrl.osc2_wave = rawW2;
+      ctrl.osc2_wave = rawW2;
+      if (rawW2 === 3) rackBytes = true;
       ctrl.osc2_sync = b(0x22, 0) ? 1 : 0;
       ctrl.osc2_range = clamp(b(0x23, 25) - 25, -25, 25);
       ctrl.osc2_fine = clamp(b(0x24, 50) - 50, -50, 50);
@@ -774,7 +776,8 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
     out[0x1e] = clamp(ctrl.osc1_wave, 0, 6);
     out[0x1f] = clamp(ctrl.osc1_ctrl1, 0, 127);
     out[0x20] = clamp(ctrl.osc1_ctrl2, 0, 127);
-    out[0x21] = clamp(ctrl.osc2_wave, 0, 2);
+    const w2 = clamp(ctrl.osc2_wave, 0, 3);
+    out[0x21] = !is8080 && w2 === 3 ? 2 : w2;
     out[0x22] = ctrl.osc2_sync ? 1 : 0;
     out[0x23] = clamp(ctrl.osc2_range + 25, 0, 50);
     out[0x24] = clamp(ctrl.osc2_fine + 50, 0, 100);
@@ -1026,7 +1029,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
     $('syxTableWrap').querySelectorAll('[data-dl-rep]').forEach(btn => {
       btn.onclick = () => {
         const rec = list[Number(btn.dataset.dlRep)];
-        const xml = encodeRepatchXml(rec.ctrl, $('optVersion').value.trim() || '0.9.4d1', $('optDac').value === '1');
+        const xml = encodeRepatchXml(rec.ctrl, $('optVersion').value.trim() || '0.9.5d1', $('optDac').value === '1');
         triggerDownload(new Blob([xml], { type: 'application/xml' }), sanitizeFilename(rec.name) + '.repatch');
       };
     });
@@ -1098,7 +1101,7 @@ tr.details-row td { background: rgba(7, 11, 20, 0.72); padding: 10px 12px; }
   $('downloadZipBtn').onclick = () => {
     const list = selectedSyxPatches();
     if (!list.length) return;
-    const ver = $('optVersion').value.trim() || '0.9.4d1';
+    const ver = $('optVersion').value.trim() || '0.9.5d1';
     const dacOn = $('optDac').value === '1';
     const used = new Map();
     const files = list.map(rec => {

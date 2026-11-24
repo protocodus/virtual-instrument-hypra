@@ -201,7 +201,7 @@ void printUsage()
         "Usage:\n"
         "  TranceraSysEx info <input.syx|.mid> [--lenient]\n"
         "  TranceraSysEx to-repatch <input.syx|.mid> <out.repatch|out_dir> [options]\n"
-        "      --version VER    deviceVersion attribute (default 0.9.4d1)\n"
+        "      --version VER    deviceVersion attribute (default 0.9.5d1)\n"
         "      --dac on|off     analog_color property value (default on)\n"
         "      --all-parts      also export Lower parts from performance dumps\n"
         "      --lenient        import packets even if checksum fails\n"
@@ -268,7 +268,7 @@ int main (int argc, char** argv)
     if (cmd == "to-repatch")
     {
         fs::path input, output;
-        std::string version = "0.9.4d1";
+        std::string version = "0.9.5d1";
         bool dacOn = true;
         bool allParts = false;
         bool lenient = false;

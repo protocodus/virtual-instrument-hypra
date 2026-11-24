@@ -82,8 +82,8 @@ private:
         Random lfoRandom;
         std::array<HeldNote, 128> keys {};
         int keyCount { 0 };
-        std::uint16_t lfo1Phase { 0 }, lfo2Phase { 0 };
-        std::uint16_t lfo1Step { 0 }, lfo2Step { 0 };
+        std::uint32_t lfo1Phase32 { 0 }, lfo1Step32 { 0 };
+        std::uint16_t lfo2Phase { 0 }, lfo2Step { 0 };
         int effAmpLfo { 0 };
         double lfoHeld { 0.0 }, lfo1 { 0.0 }, lfo2 { 0.0 };
         double lastPitch { 60.0 };
@@ -107,6 +107,7 @@ private:
     void voiceNoteOff (int note, bool obeySustain) noexcept;
     void trigger (Voice& voice, int part, int note, int velocity, bool retrigger, bool mayGlide) noexcept;
     void release (Voice& voice) noexcept;
+    static void evaluateLfo1 (PartState& state, bool wrapped, bool halfToggle) noexcept;
     void control() noexcept;
     void controlVoice (Voice& voice, int part, bool advanceTick) noexcept;
     void refreshVoices() noexcept;

@@ -433,7 +433,7 @@ void stability()
     {
         Patch p;
         p.osc1 = { static_cast<Wave1> (trial % 7), byte(), byte() };
-        p.osc2.wave = static_cast<Wave2> (byte() % 3);
+        p.osc2.wave = static_cast<Wave2> (byte() % 4);
         p.osc2.sync = byte() & 1;
         p.osc2.range = byte() % 51 - 25;
         p.osc2.fine = byte() % 101 - 50;
@@ -449,6 +449,8 @@ void stability()
         p.pitchLfo = signed7();
         p.pitchEnvDepth = signed7();
         p.lfo1.rate = byte();
+        p.lfo1.sync = (byte() & 1) != 0;
+        p.lfo1.retrig = (byte() & 1) != 0;
         p.effects.chorusType = static_cast<ChorusType> (byte() % 13);
         p.effects.chorus = byte();
         p.effects.delayType = static_cast<DelayType> (byte() % 5);
@@ -943,6 +945,69 @@ void osc2AndSync()
     near (db (tone (o2Tri, 110.0) / tone (o1Tri, 110.0)), 0.22, 0.3, "OSC 2 Triangle is +0.22 dB over OSC 1 Triangle");
     check (tone (sSaw, 110.0) > 1e-3 && tone (sSaw, 330.0) > 1e-3, "Sync Saw tracks master fundamental and overtones");
     check (tone (sTri, 110.0) > 1e-3 && tone (sPulse, 110.0) > 1e-3, "Sync Tri and Pulse track master pitch");
+
+    // Wave2::Noise: broadband output, pitch/sync/ring invariance, independent PRNG from Osc 1, and block parity.
+    {
+        auto renderPair = [] (const OscillatorPair::Controls& c, int n, int blockSize)
+        {
+            Random r (12345u);
+            OscillatorPair op;
+            op.prepare();
+            op.trigger (r, c.wave1, true);
+            op.configure (c);
+            std::vector<Q23> out (static_cast<std::size_t> (n));
+            for (int pos = 0; pos < n; pos += blockSize)
+            {
+                const int sub = std::min (blockSize, n - pos);
+                if (blockSize == 1)
+                    out[static_cast<std::size_t> (pos)] = op.processQ23 (r);
+                else
+                    op.processBlockQ23 (out.data() + pos, sub, r);
+            }
+            return out;
+        };
+
+        OscillatorPair::Controls nCtrl;
+        nCtrl.wave1 = Wave1::Triangle;
+        nCtrl.wave2 = Wave2::Noise;
+        nCtrl.hz1 = 220.0;
+        nCtrl.hz2 = 330.0;
+        nCtrl.gain1 = 0.0;
+        nCtrl.gain2 = 1.0;
+
+        const auto single = renderPair (nCtrl, 8820, 1);
+        const auto blk7 = renderPair (nCtrl, 8820, 7);
+        const auto blk64 = renderPair (nCtrl, 8820, 64);
+        const auto blk513 = renderPair (nCtrl, 8820, 513);
+        check (single == blk7 && single == blk64 && single == blk513,
+               "Osc 2 Noise single-sample and arbitrary block sizes are bit-exact");
+
+        double sq = 0.0;
+        std::vector<double> nd (single.size());
+        for (std::size_t i = 0; i < single.size(); ++i)
+        {
+            const double v = fromQ23 (single[i]);
+            nd[i] = v;
+            sq += v * v;
+        }
+        const double rms = std::sqrt (sq / static_cast<double> (single.size()));
+        check (rms > 0.05 && rms < 0.5, "Osc 2 Noise produces broadband bounded RMS");
+        check (tone (nd, 220.0) < rms * 0.25 && tone (nd, 1317.0) > 1e-4,
+               "Osc 2 Noise distributes broadband energy rather than pitched tone");
+
+        OscillatorPair::Controls ringCtrl = nCtrl;
+        ringCtrl.gain1 = 0.5;
+        ringCtrl.gain2 = 0.5;
+        ringCtrl.ring = true;
+        const auto ringOut = renderPair (ringCtrl, 4096, 64);
+        check (ringOut.size() == 4096 && ringOut[100] != ringOut[101], "Osc 2 Noise works with Ring Mod");
+
+        OscillatorPair::Controls syncCtrl = nCtrl;
+        syncCtrl.sync = true;
+        const auto syncOut = renderPair (syncCtrl, 2048, 32);
+        const std::vector<Q23> first2048 (single.begin(), single.begin() + 2048);
+        check (syncOut == first2048, "Osc 2 Noise ignores hard sync reset and remains continuous");
+    }
 }
 
 void controlAccuracy()
@@ -1935,6 +2000,9 @@ void automationGlitch()
     verifyStep ("osc1_wave rev", smooth, true,
                 [&] (Engine& e) { Patch alt = smooth; alt.osc1.wave = Wave1::Square; e.setPatch (Part::Upper, alt); },
                 64, [&] (Engine& e) { e.setPatch (Part::Upper, smooth); });
+    verifyStep ("osc2_wave noise rev", smooth, true,
+                [&] (Engine& e) { Patch alt = smooth; alt.balance = 63; alt.osc2.wave = Wave2::Noise; e.setPatch (Part::Upper, alt); },
+                64, [&] (Engine& e) { Patch alt = smooth; alt.balance = 63; alt.osc2.wave = Wave2::Saw; e.setPatch (Part::Upper, alt); });
     verifyStep ("chorus_type rev", smooth, true,
                 [&] (Engine& e) { Patch alt = smooth; alt.effects.chorus = 80; alt.effects.chorusType = ChorusType::FlangerFast; e.setPatch (Part::Upper, alt); },
                 64, [&] (Engine& e) { Patch alt = smooth; alt.effects.chorus = 80; alt.effects.chorusType = ChorusType::SuperSlow; e.setPatch (Part::Upper, alt); });
@@ -2553,6 +2621,166 @@ void tier1Features()
         check (aL == bL && aR == bR, "delaySync 0 ignores tempo bit-identically");
     }
 
+    // 4b. LFO 1 Sync (15 divisions @ 90/120/160 BPM + live tempo change + Free invariance) & Retrig.
+    {
+        // Verify lfo1Step32 periods directly at 90, 120, 160 BPM across 4/1 (idx 0), 1/4 (idx 7), and 1/16 (idx 12).
+        auto rateForDiv = [] (int divIdx) { return std::clamp ((divIdx * 128 + 14) / 15, 0, 127); };
+        auto expectedPeriodSec = [] (int rate, double bpm)
+        {
+            const int idx = (rate * static_cast<int> (mapping::lfo1SyncBeats.size())) / 128;
+            return (60.0 / bpm) * mapping::lfo1SyncBeats[static_cast<std::size_t> (idx)];
+        };
+        for (double bpm : { 90.0, 120.0, 160.0 })
+        {
+            for (int divIdx : { 0, 7, 12 })
+            {
+                const int r = rateForDiv (divIdx);
+                const std::uint32_t step = mapping::lfo1Step32 (r, true, bpm);
+                const double gotHz = static_cast<double> (step) * kEnvelopeRate / 4294967296.0;
+                const double wantHz = 1.0 / expectedPeriodSec (r, bpm);
+                near (gotHz, wantHz, 0.005, "LFO 1 synced frequency matches musical division");
+            }
+        }
+
+        // Square wave synced AM at 1/16 @ 120 BPM (= 8.0 Hz = 6000 frames/cycle @ 48 kHz; half-cycle 3000).
+        Patch sp;
+        sp.osc1 = { Wave1::Triangle, 0, 0 };
+        sp.balance = -64;
+        sp.filter = { FilterType::LowPass, true, 127, 0, 0, 0, 0, { 0, 0, 127, 0 } };
+        sp.amp = { 0, 0, 127, 0 };
+        sp.pan = PanMode::Off;
+        sp.ampLfo = 63;
+        sp.lfo1.wave = LfoWave::Square;
+        sp.lfo1.rate = rateForDiv (12); // 1/16
+        sp.lfo1.sync = true;
+        sp.lfo1.retrig = true;
+
+        Engine eSync;
+        eSync.prepare (hostFs, 81u);
+        eSync.setAnalogColor (false);
+        eSync.setOutputNode (OutputNode::Digital);
+        eSync.setTempo (120.0);
+        eSync.setPatch (Part::Upper, sp);
+        eSync.noteOn (69, 127);
+        std::vector<float> sL (24000), sR (24000);
+        eSync.render (sL.data(), sR.data(), 12000);
+        eSync.setTempo (180.0); // now 1/16 @ 180 BPM = 12 Hz (2000 frames half-cycle)
+        eSync.render (sL.data() + 12000, sR.data() + 12000, 12000);
+
+        auto measureRms = [&] (int a, int b)
+        {
+            double ss = 0.0;
+            for (int i = a; i < b; ++i)
+            {
+                const double v = static_cast<double> (sL[static_cast<std::size_t> (i)]);
+                ss += v * v;
+            }
+            return std::sqrt (ss / std::max (1, b - a));
+        };
+        // First half-cycle (frames 400..2600) is +1 square (+AM), second half-cycle (3400..5600) is -1 square (attenuated).
+        check (measureRms (400, 2600) > measureRms (3400, 5600) * 3.0,
+               "LFO 1 synced 1/16 @ 120 BPM flips square AM at 3000-frame half-period");
+
+        // Free mode ignores setTempo() bit-identically.
+        Patch fp = sp;
+        fp.lfo1.sync = false;
+        fp.lfo1.rate = 64;
+        Engine eFreeA, eFreeB;
+        eFreeA.prepare (hostFs, 82u);
+        eFreeB.prepare (hostFs, 82u);
+        eFreeA.setTempo (80.0);
+        eFreeB.setTempo (170.0);
+        eFreeA.setPatch (Part::Upper, fp);
+        eFreeB.setPatch (Part::Upper, fp);
+        eFreeA.noteOn (60, 100);
+        eFreeB.noteOn (60, 100);
+        std::vector<float> faL (9600), faR (9600), fbL (9600), fbR (9600);
+        eFreeA.render (faL.data(), faR.data(), 9600);
+        eFreeB.render (fbL.data(), fbR.data(), 9600);
+        check (faL == fbL && faR == fbR, "lfo1.sync false ignores tempo bit-identically");
+
+        // Retrig = true resets LFO 1 Square phase (+1 -> -1) at note attack regardless of prior wait,
+        // measured via windowed RMS AM envelope (1/4 @ 120 BPM = 500 ms period, waiting 300 ms lands in -1 half).
+        Patch rp = sp;
+        rp.lfo1.wave = LfoWave::Square;
+        rp.lfo1.sync = true;
+        rp.lfo1.rate = rateForDiv (7); // 1/4 @ 120 BPM = 500 ms
+        rp.lfo1.retrig = true;
+        Engine eRetrig, eFreeRun;
+        eRetrig.prepare (hostFs, 83u);
+        eFreeRun.prepare (hostFs, 83u);
+        eRetrig.setAnalogColor (false);
+        eFreeRun.setAnalogColor (false);
+        eRetrig.setOutputNode (OutputNode::Digital);
+        eFreeRun.setOutputNode (OutputNode::Digital);
+        eRetrig.setTempo (120.0);
+        eFreeRun.setTempo (120.0);
+        eRetrig.setPatch (Part::Upper, rp);
+        Patch rpNoRetrig = rp;
+        rpNoRetrig.lfo1.retrig = false;
+        eFreeRun.setPatch (Part::Upper, rpNoRetrig);
+
+        auto windowRms = [] (const std::vector<float>& buf, int start, int len)
+        {
+            double ss = 0.0;
+            for (int k = start; k < start + len; ++k)
+            {
+                const double v = static_cast<double> (buf[static_cast<std::size_t> (k)]);
+                ss += v * v;
+            }
+            return std::sqrt (ss / len);
+        };
+
+        std::vector<float> n1L (4800), f1L (4800), dummyL (9600), dummyR (9600), n2L (4800), f2L (4800);
+        // Note 1 plays for 100 ms, releases, then 200 ms wait (t = 300 ms puts FreeRun inside -1 half-cycle).
+        eRetrig.noteOn (76, 127);
+        eFreeRun.noteOn (76, 127);
+        eRetrig.render (n1L.data(), dummyR.data(), 4800);
+        eFreeRun.render (f1L.data(), dummyR.data(), 4800);
+        eRetrig.noteOff (76);
+        eFreeRun.noteOff (76);
+        eRetrig.render (dummyL.data(), dummyR.data(), 9600);
+        eFreeRun.render (dummyL.data(), dummyR.data(), 9600);
+        eRetrig.noteOn (76, 127);
+        eFreeRun.noteOn (76, 127);
+        eRetrig.render (n2L.data(), dummyR.data(), 4800);
+        eFreeRun.render (f2L.data(), dummyR.data(), 4800);
+
+        const double n1StartRms = windowRms (n1L, 200, 960);
+        const double n2RetrigRms = windowRms (n2L, 200, 960);
+        const double n2FreeRms = windowRms (f2L, 200, 960);
+        check (std::abs (n1StartRms - n2RetrigRms) < 0.04 && n2RetrigRms > n2FreeRms * 3.0,
+               "lfo1.retrig resets LFO 1 phase identically on consecutive note attacks");
+
+        // Mono legato overlapping note must NOT retrigger LFO 1 phase even when retrig = true.
+        Patch legP = rp;
+        legP.mono = true;
+        legP.legato = true;
+        legP.lfo1.sync = false;
+        legP.lfo1.rate = 95; // ~10 Hz -> in -1 half-cycle by sample 3000
+        Engine eLegA, eLegB;
+        eLegA.prepare (hostFs, 84u);
+        eLegB.prepare (hostFs, 84u);
+        eLegA.setAnalogColor (false);
+        eLegB.setAnalogColor (false);
+        eLegA.setOutputNode (OutputNode::Digital);
+        eLegB.setOutputNode (OutputNode::Digital);
+        eLegA.setPatch (Part::Upper, legP);
+        eLegB.setPatch (Part::Upper, legP);
+        std::vector<float> legHold (3200), legStepA (1600), legStepB (1600), legDummyR (3200);
+        eLegA.noteOn (60, 127);
+        eLegB.noteOn (60, 127);
+        eLegA.render (legHold.data(), legDummyR.data(), 3200);
+        eLegB.render (legHold.data(), legDummyR.data(), 3200);
+        eLegA.noteOn (64, 127); // overlapping legato step with retrig = true
+        legP.lfo1.retrig = false;
+        eLegB.setPatch (Part::Upper, legP);
+        eLegB.noteOn (64, 127); // overlapping legato step with retrig = false
+        eLegA.render (legStepA.data(), legDummyR.data(), 1600);
+        eLegB.render (legStepB.data(), legDummyR.data(), 1600);
+        check (legStepA == legStepB, "mono legato overlapping note preserves LFO 1 phase even when lfo1.retrig is on");
+    }
+
     // 5. Block-size independence across all Tier 1 features active together.
     {
         auto runCombined = [] (int chunk)
@@ -2977,41 +3205,47 @@ void sysexCodec()
            && perfRes.patches[0].patch.arp.range == 2
            && perfRes.patches[0].patch.arp.hold
            && perfRes.patches[0].patch.effects.delaySync == 9
-           && perfRes.patches[0].patch.osc2.wave == Wave2::Triangle
-           && perfRes.patches[0].warnings.osc2NoiseMappedToTriangle
+           && perfRes.patches[0].patch.osc2.wave == Wave2::Noise
+           && ! perfRes.patches[0].warnings.osc2NoiseMappedToTriangle
            && perfRes.patches[1].patch.effects.delaySync == 3
            && perfRes.patches[1].patch.effects.chorusType == ChorusType::Distortion
            && ! perfRes.patches[1].warnings.distortionMappedToChorus,
-           "Performance overlay maps Arp + DelaySync + native JP-8080 Distortion and Osc2Noise fallback");
+           "Performance overlay maps Arp + DelaySync + native JP-8080 Osc2Noise and Distortion");
 
-    // 5b. Exporting ChorusType::Distortion emits byte 12 in JP-8080 format and maps to 0 (SuperSlow) in JP-8000 format.
+    // 5b. Exporting Wave2::Noise + ChorusType::Distortion emits bytes 3/12 in JP-8080 format and clamps cleanly in JP-8000 format.
     {
         Patch distPatch = full;
+        distPatch.osc2.wave = Wave2::Noise;
         distPatch.effects.chorusType = ChorusType::Distortion;
         distPatch.effects.chorus = 77;
         std::array<std::uint8_t, kRackPatchBytes> rackBytes {};
         std::array<std::uint8_t, kKeyboardPatchBytes> kbBytes {};
         check (writePatchBytes (distPatch, "DistLead", Format::JP8080, rackBytes.data(), rackBytes.size()) == kRackPatchBytes
+               && rackBytes[0x21] == 3
                && rackBytes[0x3D] == 12,
-               "JP-8080 raw export encodes ChorusType::Distortion as MultiEffectsType 12");
+               "JP-8080 raw export encodes Wave2::Noise as 3 and ChorusType::Distortion as 12");
         check (writePatchBytes (distPatch, "DistLead", Format::JP8000, kbBytes.data(), kbBytes.size()) == kKeyboardPatchBytes
+               && kbBytes[0x21] == 2
                && kbBytes[0x3D] == 0,
-               "JP-8000 raw export clamps ChorusType::Distortion cleanly to 0 (Super Chorus Slow)");
+               "JP-8000 raw export clamps Wave2::Noise to 2 (Triangle) and Distortion to 0 (Super Chorus Slow)");
 
         const auto dist8080Pkt = encodePatch (distPatch, "DistLead", Format::JP8080);
         const ParseResult dist8080Res = parseStream (dist8080Pkt.data(), dist8080Pkt.size());
         check (dist8080Res.patches.size() == 1
                && dist8080Res.patches[0].detectedFormat == Format::JP8080
+               && dist8080Res.patches[0].patch.osc2.wave == Wave2::Noise
                && dist8080Res.patches[0].patch.effects.chorusType == ChorusType::Distortion
+               && ! dist8080Res.patches[0].warnings.osc2NoiseMappedToTriangle
                && ! dist8080Res.patches[0].warnings.distortionMappedToChorus,
-               "JP-8080 Distortion SysEx round-trips natively without fallback warnings");
+               "JP-8080 Noise + Distortion SysEx round-trips natively without fallback warnings");
 
         const auto dist8kPkt = encodePatch (distPatch, "DistLead", Format::JP8000);
         const ParseResult dist8kRes = parseStream (dist8kPkt.data(), dist8kPkt.size());
         check (dist8kRes.patches.size() == 1
                && dist8kRes.patches[0].detectedFormat == Format::JP8000
+               && dist8kRes.patches[0].patch.osc2.wave == Wave2::Triangle
                && dist8kRes.patches[0].patch.effects.chorusType == ChorusType::SuperSlow,
-               "JP-8000 SysEx export maps Distortion safely to SuperSlow");
+               "JP-8000 SysEx export maps Noise safely to Triangle and Distortion safely to SuperSlow");
     }
 
     // 6. Standard MIDI File (.mid) extraction + corrupt checksum rejection.

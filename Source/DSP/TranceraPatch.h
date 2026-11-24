@@ -7,7 +7,7 @@
 namespace trancera
 {
 enum class Wave1 : std::uint8_t { SuperSaw, TriangleMod, Noise, FeedbackOsc, Square, Saw, Triangle };
-enum class Wave2 : std::uint8_t { Square, Saw, Triangle };
+enum class Wave2 : std::uint8_t { Square, Saw, Triangle, Noise };
 enum class FilterType : std::uint8_t { HighPass, BandPass, LowPass };
 enum class LfoWave : std::uint8_t { Triangle, Saw, Square, SampleHold };
 enum class ModDestination : std::uint8_t { Osc1And2, Osc2, XMod };
@@ -65,6 +65,8 @@ struct Lfo1Params
 {
     LfoWave wave { LfoWave::Triangle };
     int rate { 48 }, fade { 0 };
+    bool sync { false };
+    bool retrig { false };
 };
 
 struct Lfo2Params

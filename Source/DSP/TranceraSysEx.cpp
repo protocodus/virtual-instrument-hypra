@@ -201,16 +201,9 @@ PatchRecord decodeSlotBuffer (const RawSlotBuffer& slot, const PerfOverlay* over
     p.osc1.ctrl2 = clampByte (b (0x20, 0), 0, 127);
 
     const int rawOsc2Wave = clampByte (b (0x21, 1), 0, 3);
+    p.osc2.wave = static_cast<Wave2> (rawOsc2Wave);
     if (rawOsc2Wave == 3)
-    {
-        p.osc2.wave = Wave2::Triangle;
-        rec.warnings.osc2NoiseMappedToTriangle = true;
         hasRackBytes = true;
-    }
-    else
-    {
-        p.osc2.wave = static_cast<Wave2> (rawOsc2Wave);
-    }
     p.osc2.sync = b (0x22, 0) != 0;
     p.osc2.range = clampByte (b (0x23, 25) - 25, -25, 25);
     p.osc2.fine = clampByte (b (0x24, 50) - 50, -50, 50);
@@ -576,7 +569,8 @@ std::size_t writePatchBytes (const Patch& patch, std::string_view name, Format f
     out[0x1F] = static_cast<std::uint8_t> (clampByte (patch.osc1.ctrl1, 0, 127));
     out[0x20] = static_cast<std::uint8_t> (clampByte (patch.osc1.ctrl2, 0, 127));
 
-    out[0x21] = static_cast<std::uint8_t> (clampByte (static_cast<int> (patch.osc2.wave), 0, 2));
+    const int w2 = clampByte (static_cast<int> (patch.osc2.wave), 0, 3);
+    out[0x21] = static_cast<std::uint8_t> ((format == Format::JP8080) ? w2 : (w2 == 3 ? 2 : w2));
     out[0x22] = static_cast<std::uint8_t> (patch.osc2.sync ? 1 : 0);
     out[0x23] = static_cast<std::uint8_t> (clampByte (patch.osc2.range + 25, 0, 50));
     out[0x24] = static_cast<std::uint8_t> (clampByte (patch.osc2.fine + 50, 0, 100));
