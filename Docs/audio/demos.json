@@ -1,0 +1,16 @@
+{
+  "instrument": "Trancera Rack patches",
+  "sample_rate": 48000,
+  "block_frames": 256,
+  "seed": 20261017,
+  "demos": [
+    {"number": 20, "preset": "Unison Trance Sub", "file": "020-unison-trance-sub.wav", "seconds": 9.863625, "peak_dbfs": -14.5500684},
+    {"number": 40, "preset": "Wide Unison Strings", "file": "040-wide-unison-strings.wav", "seconds": 11.010875, "peak_dbfs": -10.4005764},
+    {"number": 58, "preset": "Tine FM Electric", "file": "058-tine-fm-electric.wav", "seconds": 11.375, "peak_dbfs": -5.80661478},
+    {"number": 75, "preset": "Super Saw Lead", "file": "075-super-saw-lead.wav", "seconds": 9.4001875, "peak_dbfs": -11.8671422},
+    {"number": 85, "preset": "Evolving Unison Horizon", "file": "085-evolving-unison-horizon.wav", "seconds": 11.1875, "peak_dbfs": -10.7439043},
+    {"number": 105, "preset": "Euphoric 16th Trance Arp", "file": "105-euphoric-16th-trance-arp.wav", "seconds": 9.94385417, "peak_dbfs": -10.4371495},
+    {"number": 129, "preset": "Hard Sync Tear", "file": "129-hard-sync-tear.wav", "seconds": 8.973625, "peak_dbfs": -14.6443222},
+    {"number": 147, "preset": "Desert Storm Saw", "file": "147-desert-storm-saw.wav", "seconds": 10.5293958, "peak_dbfs": -9.39881535}
+  ]
+}

@@ -2,13 +2,34 @@
 
 Trancera is a native C++17 virtual-analog synthesizer modelled on the Roland JP-8000 (1997) and JP-8080 (1998). The owner named it Trancera on 2026-11-23 (it was Hypra until then). It is an independent original implementation, not affiliated with or licensed by Roland, and holds no firmware, ROM data, samples, captured audio or factory patch data. Since 2026-11-23 it is not clean-room: at the owner's risk, constants may be taken from an analysis of the JP-8000 firmware (tagged `[firmware]`).
 
-**Status: 0.9.6.** Its Reason Rack Extension is `Examples/Trancera` in `protocodus/reason-rack-extensions` (with a 9U 5× HD Cobalt Studio panel, 56 categorized factory presets plus 14 root highlights, 70 automatable panel controls plus `Mono`/`Unison`, `DAC` circuitry toggle, 14-bit `Mod Wheel`, `Pitch Wheel`, `Sustain`, `Channel Aftertouch`, and a 12-input / 4-output rear CV modulation matrix alongside auto-routed Note/Gate CV), accompanied by a canonical C++17 JP-8000 / JP-8080 SysEx codec, the `TranceraSysEx` CLI converter, and an offline browser converter (`Tools/sysex-converter/index.html`) for `.syx`/`.mid` ↔ `.repatch` exchange. There is no standalone VST3/AU/CLAP plug-in wrapper yet, and no Split key mode, Control Assign matrix, or Arp Beat Patterns yet.
+**Status: 0.9.6.** Its Reason Rack Extension is `Examples/Trancera` in `protocodus/reason-rack-extensions` (with a 9U 5× HD Cobalt Studio panel, 160 categorized factory presets plus 16 root highlights, 70 automatable panel controls plus `Mono`/`Unison`, `DAC` circuitry toggle, 14-bit `Mod Wheel`, `Pitch Wheel`, `Sustain`, `Channel Aftertouch`, and a 12-input / 4-output rear CV modulation matrix alongside auto-routed Note/Gate CV), accompanied by a canonical C++17 JP-8000 / JP-8080 SysEx codec, the `TranceraSysEx` CLI converter, and an offline browser converter (`Tools/sysex-converter/index.html`) for `.syx`/`.mid` ↔ `.repatch` exchange. There is no standalone VST3/AU/CLAP plug-in wrapper yet, and no Split key mode, Control Assign matrix, or Arp Beat Patterns yet.
 
 In a 20-patch JE-8086 A/B pass on `0.9.2` (Part A, `SINGLE`, velocity matrix active, digital node), **18 of 20 factory patches** match within ≤ 2.0 dB across raw level and all three spectral bands (`< 300 Hz`, `0.3–3 kHz`, `> 3 kHz`), and **19 of 20** match within ≤ 2.2 dB.
 
 ![The Rack Extension's front panel](Docs/screenshots/trancera-rack-front.png)
 
-The Rack Extension's front panel, rendered by `Design/render_panels.py`.
+The Rack Extension's front panel (`0.9.6f4`), rendered by `Design/render_panels.py`.
+
+## Audio demos
+
+Eight curated factory presets (one per category) rendered through the real `CTrancera` Rack adapter in the SDK-free test host at `48 kHz / 24-bit`, using each phrase's tempo, song settings at defaults, and zero external effects or normalisation.
+
+<!-- audio-demos-begin -->
+
+| # | Preset | Demo | Length | Peak |
+| --- | --- | --- | --- | --- |
+| 20 | Unison Trance Sub | [020-unison-trance-sub.wav](Docs/audio/020-unison-trance-sub.wav) | 9.9 s | -14.6 dBFS |
+| 40 | Wide Unison Strings | [040-wide-unison-strings.wav](Docs/audio/040-wide-unison-strings.wav) | 11.0 s | -10.4 dBFS |
+| 58 | Tine FM Electric | [058-tine-fm-electric.wav](Docs/audio/058-tine-fm-electric.wav) | 11.4 s | -5.8 dBFS |
+| 75 | Super Saw Lead | [075-super-saw-lead.wav](Docs/audio/075-super-saw-lead.wav) | 9.4 s | -11.9 dBFS |
+| 85 | Evolving Unison Horizon | [085-evolving-unison-horizon.wav](Docs/audio/085-evolving-unison-horizon.wav) | 11.2 s | -10.7 dBFS |
+| 105 | Euphoric 16th Trance Arp | [105-euphoric-16th-trance-arp.wav](Docs/audio/105-euphoric-16th-trance-arp.wav) | 9.9 s | -10.4 dBFS |
+| 129 | Hard Sync Tear | [129-hard-sync-tear.wav](Docs/audio/129-hard-sync-tear.wav) | 9.0 s | -14.6 dBFS |
+| 147 | Desert Storm Saw | [147-desert-storm-saw.wav](Docs/audio/147-desert-storm-saw.wav) | 10.5 s | -9.4 dBFS |
+
+<!-- audio-demos-end -->
+
+Browse [all 160 factory preset demos (MP3)](https://github.com/protocodus/reason-rack-extensions/blob/main/Examples/Trancera/Docs/audio/presets/README.md) in `protocodus/reason-rack-extensions`.
 
 ---
 
